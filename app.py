@@ -1,10 +1,13 @@
 import json
 import os
 from datetime import datetime
+from flask_cors import CORS
 from flask import Flask, request, jsonify
 from openai import OpenAI
 
 app = Flask(__name__)
+CORS(app) 
+
 
 # Secure API key from environment variable
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
