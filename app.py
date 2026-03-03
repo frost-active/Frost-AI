@@ -1,18 +1,22 @@
 import json
 import os
-from datetime import datetime
-from flask_cors import CORS
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from openai import OpenAI
 
 app = Flask(__name__)
-CORS(app) 
+CORS(app)
 
-
-# Secure API key from environment variable
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-SYSTEM_PROMPT = """
+CHAT_PROMPT = """
+You are a helpful, friendly hydration and wellness assistant.
+Hold natural conversations with the user.
+Answer questions conversationally and clearly.
+Do NOT return JSON unless explicitly asked.
+"""
+
+PARSE_PROMPT = """
 You are a scheduling assistant.
 
 Extract hydration scheduling AND reminder timer information from user input.
@@ -59,28 +63,57 @@ Schema:
 
 @app.route("/")
 def home():
-    return "Hydration Scheduler API is running 🚀"
+    return "Hydration Chatbot API is running 🚀"
 
-@app.route("/parse", methods=["POST"])
-def parse_schedule():
+@app.route("/chat", methods=["POST"])
+def chat():
     try:
-        user_text = request.json.get("text")
+        data = request.get_json(force=True)
+        user_text = data.get("text")
+        mode = data.get("mode", "chat")
+
+        if not user_text:
+            return jsonify({"error": "Missing 'text' field"}), 400
+
+        if mode == "auto":
+            keywords = ["remind", "schedule", "every", "from", "until", "between"]
+            if any(word in user_text.lower() for word in keywords):
+                mode = "parse"
+            else:
+                mode = "chat"
+
+        system_prompt = PARSE_PROMPT if mode == "parse" else CHAT_PROMPT
 
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text}
             ]
         )
 
-        raw_output = response.output_text.strip()
-        parsed_json = json.loads(raw_output)
+        output_text = response.output_text.strip()
 
-        return jsonify(parsed_json)
+        if mode == "parse":
+            try:
+                parsed_json = json.loads(output_text)
+                return jsonify({
+                    "mode": "parse",
+                    "data": parsed_json
+                })
+            except json.JSONDecodeError:
+                return jsonify({
+                    "error": "Invalid JSON returned by model",
+                    "raw_output": output_text
+                }), 500
+
+        return jsonify({
+            "mode": "chat",
+            "message": output_text
+        })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
