@@ -1,25 +1,27 @@
 import json
 import os
-from flask import Flask, request, jsonify
+from datetime import datetime
 from flask_cors import CORS
+from flask import Flask, request, jsonify
 from openai import OpenAI
+
 
 app = Flask(__name__)
 CORS(app)
 
+
+
+
+# Secure API key from environment variable
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-CHAT_PROMPT = """
-You are a helpful, friendly hydration and wellness assistant.
-Hold natural conversations with the user.
-Answer questions conversationally and clearly.
-Do NOT return JSON unless explicitly asked.
-"""
 
-PARSE_PROMPT = """
+SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
+
 Extract hydration scheduling AND reminder timer information from user input.
+
 
 Rules:
 - Always return VALID JSON
@@ -30,14 +32,17 @@ Rules:
 - hydration_timer.start_time and end_time should usually match active_window
 - Follow this schema exactly
 
+
 Schema:
 {
   "task": "hydration",
+
 
   "active_window": {
     "start": "HH:MM",
     "end": "HH:MM"
   },
+
 
   "hydration_timer": {
     "enabled": true,
@@ -46,6 +51,7 @@ Schema:
     "end_time": "HH:MM",
     "alert_message": "Time to drink water 💧"
   },
+
 
   "exclusions": [
     {
@@ -61,59 +67,38 @@ Schema:
 }
 """
 
+
 @app.route("/")
 def home():
-    return "Hydration Chatbot API is running 🚀"
+    return "Hydration Scheduler API is running 🚀"
 
-@app.route("/chat", methods=["POST"])
-def chat():
+
+@app.route("/parse", methods=["POST"])
+def parse_schedule():
     try:
-        data = request.get_json(force=True)
-        user_text = data.get("text")
-        mode = data.get("mode", "chat")
+        user_text = request.json.get("text")
 
-        if not user_text:
-            return jsonify({"error": "Missing 'text' field"}), 400
-
-        if mode == "auto":
-            keywords = ["remind", "schedule", "every", "from", "until", "between"]
-            if any(word in user_text.lower() for word in keywords):
-                mode = "parse"
-            else:
-                mode = "chat"
-
-        system_prompt = PARSE_PROMPT if mode == "parse" else CHAT_PROMPT
 
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
             ]
         )
 
-        output_text = response.output_text.strip()
 
-        if mode == "parse":
-            try:
-                parsed_json = json.loads(output_text)
-                return jsonify({
-                    "mode": "parse",
-                    "data": parsed_json
-                })
-            except json.JSONDecodeError:
-                return jsonify({
-                    "error": "Invalid JSON returned by model",
-                    "raw_output": output_text
-                }), 500
+        raw_output = response.output_text.strip()
+        parsed_json = json.loads(raw_output)
 
-        return jsonify({
-            "mode": "chat",
-            "message": output_text
-        })
+
+        return jsonify(parsed_json)
+
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e)}), 400
+
+
 
 
 if __name__ == "__main__":
