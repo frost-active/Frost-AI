@@ -10,18 +10,13 @@ app = Flask(__name__)
 CORS(app)
 
 
-
-
-# Secure API key from environment variable
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
-
 Extract hydration scheduling AND reminder timer information from user input.
-
 
 Rules:
 - Always return VALID JSON
@@ -30,19 +25,18 @@ Rules:
 - If the user implies reminders (e.g., "remind me", "every 30 minutes"), enable hydration_timer
 - If no interval is mentioned but reminders are implied, default interval_minutes to 30
 - hydration_timer.start_time and end_time should usually match active_window
+- "do_not_disturb" represents time ranges where hydration reminders should pause
+- Multiple do_not_disturb windows are allowed
 - Follow this schema exactly
-
 
 Schema:
 {
   "task": "hydration",
 
-
   "active_window": {
     "start": "HH:MM",
     "end": "HH:MM"
   },
-
 
   "hydration_timer": {
     "enabled": true,
@@ -52,6 +46,13 @@ Schema:
     "alert_message": "Time to drink water 💧"
   },
 
+  "do_not_disturb": [
+    {
+      "label": "string",
+      "start": "HH:MM",
+      "end": "HH:MM"
+    }
+  ],
 
   "exclusions": [
     {
@@ -78,7 +79,6 @@ def parse_schedule():
     try:
         user_text = request.json.get("text")
 
-
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
@@ -87,18 +87,13 @@ def parse_schedule():
             ]
         )
 
-
         raw_output = response.output_text.strip()
         parsed_json = json.loads(raw_output)
 
-
         return jsonify(parsed_json)
-
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
-
-
 
 
 if __name__ == "__main__":
