@@ -26,6 +26,9 @@ Rules:
 - If no interval is mentioned but reminders are implied, default interval_minutes to 30
 - hydration_timer.start_time and end_time should usually match active_window
 - "do_not_disturb" represents time ranges where hydration reminders should pause
+- dont include lunch breaks as do_not_disturb unless explicitly mentioned by the user
+- dont consider sleep time as do_not_disturb unless explicitly mentioned by the user
+- donot include meetings as do_not_disturb unless explicitly mentioned by the user
 - Multiple do_not_disturb windows are allowed
 - Follow this schema exactly
 
