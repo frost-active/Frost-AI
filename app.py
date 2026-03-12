@@ -19,12 +19,14 @@ Rules:
 - Always return VALID JSON
 - Use 24-hour time format (HH:MM)
 - If a field is missing, use null
-- If the user implies reminders enable hydration_timer
-- If no interval is mentioned but reminders are implied default interval_minutes to 30
-- hydration_timer.start_time and end_time should match active_window
-- do_not_disturb represents time ranges where reminders pause
-- lunch, sleep, or meetings should NOT be included unless explicitly stated
-- Multiple do_not_disturb windows allowed
+- If the user implies reminders (e.g., "remind me", "every 30 minutes"), enable hydration_timer
+- If no interval is mentioned but reminders are implied, default interval_minutes to 30
+- hydration_timer.start_time and end_time should usually match active_window
+- "do_not_disturb" represents time ranges where hydration reminders should pause
+- dont include lunch breaks as do_not_disturb unless explicitly mentioned by the user
+- dont consider sleep time as do_not_disturb unless explicitly mentioned by the user
+- donot include meetings as do_not_disturb unless explicitly mentioned by the user
+- Multiple do_not_disturb windows are allowed
 
 Schema:
 {
@@ -68,7 +70,6 @@ def home():
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
-
         start_time = datetime.now()
 
         data = request.get_json()
@@ -79,7 +80,6 @@ def parse_schedule():
 
         response = client.responses.create(
             model="gpt-5-nano",
-            response_format={"type": "json_object"},
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
@@ -87,12 +87,24 @@ def parse_schedule():
         )
 
         raw_output = response.output_text.strip()
+
+        # Clean possible markdown formatting
+        if raw_output.startswith("```"):
+            raw_output = raw_output.replace("```json", "").replace("```", "").strip()
+
         parsed = json.loads(raw_output)
 
+        # Enforce output order and defaults
         ordered_output = {
             "task": parsed.get("task", "hydration"),
             "active_window": parsed.get("active_window", {"start": None, "end": None}),
-            "hydration_timer": parsed.get("hydration_timer", {}),
+            "hydration_timer": parsed.get("hydration_timer", {
+                "enabled": False,
+                "interval_minutes": None,
+                "start_time": None,
+                "end_time": None,
+                "alert_message": "Time to drink water 💧"
+            }),
             "do_not_disturb": parsed.get("do_not_disturb", []),
             "exclusions": parsed.get("exclusions", [])
         }
