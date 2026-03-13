@@ -7,6 +7,7 @@ from openai import OpenAI
 from collections import OrderedDict
 
 app = Flask(__name__)
+app.json.sort_keys = False
 CORS(app)
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
