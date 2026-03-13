@@ -4,6 +4,7 @@ from datetime import datetime
 from flask_cors import CORS
 from flask import Flask, request, jsonify
 from openai import OpenAI
+from collections import OrderedDict
 
 app = Flask(__name__)
 CORS(app)
@@ -67,6 +68,7 @@ Schema:
 def home():
     return "Hydration Scheduler API is running 🚀"
 
+
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
@@ -88,26 +90,33 @@ def parse_schedule():
 
         raw_output = response.output_text.strip()
 
-        # Clean possible markdown formatting
         if raw_output.startswith("```"):
             raw_output = raw_output.replace("```json", "").replace("```", "").strip()
 
         parsed = json.loads(raw_output)
 
-        # Enforce output order and defaults
-        ordered_output = {
-            "task": parsed.get("task", "hydration"),
-            "active_window": parsed.get("active_window", {"start": None, "end": None}),
-            "hydration_timer": parsed.get("hydration_timer", {
-                "enabled": False,
-                "interval_minutes": None,
-                "start_time": None,
-                "end_time": None,
-                "alert_message": "Time to drink water 💧"
-            }),
-            "do_not_disturb": parsed.get("do_not_disturb", []),
-            "exclusions": parsed.get("exclusions", [])
+        active_window = parsed.get("active_window", {})
+        hydration_timer = parsed.get("hydration_timer", {})
+
+        ordered_output = OrderedDict()
+
+        ordered_output["task"] = parsed.get("task", "hydration")
+
+        ordered_output["active_window"] = {
+            "start": active_window.get("start"),
+            "end": active_window.get("end")
         }
+
+        ordered_output["hydration_timer"] = {
+            "enabled": hydration_timer.get("enabled", False),
+            "interval_minutes": hydration_timer.get("interval_minutes"),
+            "start_time": hydration_timer.get("start_time"),
+            "end_time": hydration_timer.get("end_time"),
+            "alert_message": hydration_timer.get("alert_message", "Time to drink water 💧")
+        }
+
+        ordered_output["do_not_disturb"] = parsed.get("do_not_disturb", [])
+        ordered_output["exclusions"] = parsed.get("exclusions", [])
 
         print("Processing time:", datetime.now() - start_time)
 
