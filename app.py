@@ -69,7 +69,6 @@ Schema:
 def home():
     return "Hydration Scheduler API is running 🚀"
 
-
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
