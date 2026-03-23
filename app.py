@@ -1,16 +1,18 @@
-import json
 import os
 from datetime import datetime
 from flask_cors import CORS
 from flask import Flask, request, jsonify, Response
 from openai import OpenAI
-from collections import OrderedDict
 
 app = Flask(__name__)
 app.json.sort_keys = False
 CORS(app)
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    timeout=10,
+    max_retries=2
+)
 
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
@@ -21,14 +23,11 @@ Rules:
 - Always return VALID JSON
 - Use 24-hour time format (HH:MM)
 - If a field is missing, use null
-- If the user implies reminders (e.g., "remind me", "every 30 minutes"), enable hydration_timer
-- If no interval is mentioned but reminders are implied, default interval_minutes to 30
-- hydration_timer.start_time and end_time should usually match active_window
-- "do_not_disturb" represents time ranges where hydration reminders should pause
-- dont include lunch breaks as do_not_disturb unless explicitly mentioned by the user
-- dont consider sleep time as do_not_disturb unless explicitly mentioned by the user
-- donot include meetings as do_not_disturb unless explicitly mentioned by the user
-- Multiple do_not_disturb windows are allowed
+- If the user implies reminders, enable hydration_timer
+- Default interval_minutes to 30 if not specified
+- hydration_timer times should match active_window
+- do_not_disturb only if explicitly mentioned
+- Multiple do_not_disturb windows allowed
 
 Schema:
 {
@@ -44,24 +43,8 @@ Schema:
     "end_time": "HH:MM",
     "alert_message": "Time to drink water 💧"
   },
-  "do_not_disturb": [
-    {
-      "label": "string",
-      "start": "HH:MM",
-      "end": "HH:MM"
-    }
-  ],
-  "exclusions": [
-    {
-      "label": "string",
-      "start": "HH:MM",
-      "end": "HH:MM"
-    },
-    {
-      "label": "string",
-      "time": "HH:MM"
-    }
-  ]
+  "do_not_disturb": [],
+  "exclusions": []
 }
 """
 
@@ -77,53 +60,51 @@ def parse_schedule():
         data = request.get_json()
         user_text = data.get("text") if data else None
 
-        if not user_text:
-            return jsonify({"error": "No input text provided"}), 400
+        # ✅ Input validation
+        if not isinstance(user_text, str) or not user_text.strip():
+            return jsonify({"error": "Invalid input text"}), 400
 
+        if len(user_text) > 1000:
+            return jsonify({"error": "Input too long"}), 400
+
+        # ✅ OpenAI call with strict JSON output
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
-            ]
+            ],
+            response_format={"type": "json_object"}
         )
 
-        raw_output = response.output_text.strip()
-
-        if raw_output.startswith("```"):
-            raw_output = raw_output.replace("```json", "").replace("```", "").strip()
-
-        parsed = json.loads(raw_output)
+        # ✅ NO double processing — directly use structured output
+        parsed = response.output[0].content[0].json
 
         active_window = parsed.get("active_window", {})
         hydration_timer = parsed.get("hydration_timer", {})
 
-        ordered_output = OrderedDict()
-
-        ordered_output["task"] = parsed.get("task", "hydration")
-
-        ordered_output["active_window"] = {
-            "start": active_window.get("start"),
-            "end": active_window.get("end")
+        output = {
+            "task": parsed.get("task", "hydration"),
+            "active_window": {
+                "start": active_window.get("start"),
+                "end": active_window.get("end")
+            },
+            "hydration_timer": {
+                "enabled": hydration_timer.get("enabled", False),
+                "interval_minutes": hydration_timer.get("interval_minutes"),
+                "start_time": hydration_timer.get("start_time"),
+                "end_time": hydration_timer.get("end_time"),
+                "alert_message": hydration_timer.get("alert_message", "Time to drink water 💧")
+            },
+            "do_not_disturb": parsed.get("do_not_disturb", []),
+            "exclusions": parsed.get("exclusions", [])
         }
-
-        ordered_output["hydration_timer"] = {
-            "enabled": hydration_timer.get("enabled", False),
-            "interval_minutes": hydration_timer.get("interval_minutes"),
-            "start_time": hydration_timer.get("start_time"),
-            "end_time": hydration_timer.get("end_time"),
-            "alert_message": hydration_timer.get("alert_message", "Time to drink water 💧")
-        }
-
-        ordered_output["do_not_disturb"] = parsed.get("do_not_disturb", [])
-        ordered_output["exclusions"] = parsed.get("exclusions", [])
 
         print("Processing time:", datetime.now() - start_time)
 
-        json_data = json.dumps(ordered_output, indent=2)
-
+        # Still returning downloadable JSON (same behavior)
         return Response(
-            json_data,
+            response=jsonify(output).get_data(as_text=True),
             mimetype="application/json",
             headers={
                 "Content-Disposition": "attachment; filename=hydration_schedule.json"
