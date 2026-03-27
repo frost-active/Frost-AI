@@ -28,6 +28,8 @@ Rules:
 - hydration_timer times should match active_window
 - do_not_disturb only if explicitly mentioned
 - Multiple do_not_disturb windows allowed
+- flag invalid content as not parsable
+
 
 Schema:
 {
