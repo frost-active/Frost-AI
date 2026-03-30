@@ -62,14 +62,14 @@ def parse_schedule():
         data = request.get_json()
         user_text = data.get("text") if data else None
 
-        # ✅ Input validation
+        
         if not isinstance(user_text, str) or not user_text.strip():
             return jsonify({"error": "Invalid input text"}), 400
 
         if len(user_text) > 1000:
             return jsonify({"error": "Input too long"}), 400
 
-        # ✅ OpenAI call with strict JSON output
+        
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
@@ -103,7 +103,7 @@ def parse_schedule():
 
         print("Processing time:", datetime.now() - start_time)
 
-        # Still returning downloadable JSON (same behavior)
+        
         return Response(
             response=jsonify(output).get_data(as_text=True),
             mimetype="application/json",
