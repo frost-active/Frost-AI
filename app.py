@@ -79,7 +79,6 @@ def parse_schedule():
             response_format={"type": "json_object"}
         )
 
-        # ✅ NO double processing — directly use structured output
         parsed = response.output[0].content[0].json
 
         active_window = parsed.get("active_window", {})
