@@ -87,7 +87,7 @@ def parse_schedule():
         output = {
             "task": parsed.get("task", "hydration"),
             "active_window": {
-                "start": active_window.get("start"),
+                 "start": active_window.get("start"),
                 "end": active_window.get("end")
             },
             "hydration_timer": {
