@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from flask_cors import CORS
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify
 from openai import OpenAI
 
 app = Flask(__name__)
@@ -30,7 +30,6 @@ Rules:
 - Multiple do_not_disturb windows allowed
 - flag invalid content as not parsable
 
-
 Schema:
 {
   "task": "hydration",
@@ -58,18 +57,26 @@ def home():
 def parse_schedule():
     try:
         start_time = datetime.now()
+        logs = []
+
+        logs.append("Request received")
 
         data = request.get_json()
-        user_text = data.get("text") if data else None
+        logs.append("JSON parsed")
 
-        
+        user_text = data.get("text") if data else None
+        logs.append(f"User input: {user_text}")
+
         if not isinstance(user_text, str) or not user_text.strip():
-            return jsonify({"error": "Invalid input text"}), 400
+            logs.append("Invalid input")
+            return jsonify({"error": "Invalid input text", "logs": logs}), 400
 
         if len(user_text) > 1000:
-            return jsonify({"error": "Input too long"}), 400
+            logs.append("Input too long")
+            return jsonify({"error": "Input too long", "logs": logs}), 400
 
-        
+        logs.append("Calling OpenAI API")
+
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
@@ -79,7 +86,10 @@ def parse_schedule():
             response_format={"type": "json_object"}
         )
 
+        logs.append("Received response from OpenAI")
+
         parsed = response.output[0].content[0].json
+        logs.append("Parsed JSON")
 
         active_window = parsed.get("active_window", {})
         hydration_timer = parsed.get("hydration_timer", {})
@@ -87,7 +97,7 @@ def parse_schedule():
         output = {
             "task": parsed.get("task", "hydration"),
             "active_window": {
-                 "start": active_window.get("start"),
+                "start": active_window.get("start"),
                 "end": active_window.get("end")
             },
             "hydration_timer": {
@@ -101,16 +111,13 @@ def parse_schedule():
             "exclusions": parsed.get("exclusions", [])
         }
 
-        print("Processing time:", datetime.now() - start_time)
+        duration = (datetime.now() - start_time).total_seconds()
+        logs.append(f"Processing time: {duration}s")
 
-        
-        return Response(
-            response=jsonify(output).get_data(as_text=True),
-            mimetype="application/json",
-            headers={
-                "Content-Disposition": "attachment; filename=hydration_schedule.json"
-            }
-        )
+        return jsonify({
+            "logs": logs,
+            "data": output
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
