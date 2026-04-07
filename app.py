@@ -55,10 +55,10 @@ def home():
 
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
-    try:
-        start_time = datetime.now()
-        logs = []
+    start_time = datetime.now()
+    logs = []
 
+    try:
         logs.append("Request received")
 
         data = request.get_json()
@@ -69,11 +69,17 @@ def parse_schedule():
 
         if not isinstance(user_text, str) or not user_text.strip():
             logs.append("Invalid input")
-            return jsonify({"error": "Invalid input text", "logs": logs}), 400
+            return jsonify({
+                "error": "Invalid input text",
+                "logs": logs
+            }), 400
 
         if len(user_text) > 1000:
             logs.append("Input too long")
-            return jsonify({"error": "Input too long", "logs": logs}), 400
+            return jsonify({
+                "error": "Input too long",
+                "logs": logs
+            }), 400
 
         logs.append("Calling OpenAI API")
 
@@ -88,8 +94,15 @@ def parse_schedule():
 
         logs.append("Received response from OpenAI")
 
-        parsed = response.output[0].content[0].json
-        logs.append("Parsed JSON")
+        try:
+            parsed = response.output[0].content[0].json
+            logs.append("Parsed JSON")
+        except Exception as e:
+            logs.append("Failed to parse AI response")
+            return jsonify({
+                "error": "AI response parsing failed",
+                "logs": logs
+            }), 500
 
         active_window = parsed.get("active_window", {})
         hydration_timer = parsed.get("hydration_timer", {})
@@ -120,7 +133,12 @@ def parse_schedule():
         })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        logs.append("Unhandled exception")
+        logs.append(str(e))
+        return jsonify({
+            "error": "Internal server error",
+            "logs": logs
+        }), 500
 
 
 if __name__ == "__main__":
