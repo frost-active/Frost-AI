@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime
 from flask_cors import CORS
 from flask import Flask, request, jsonify
@@ -28,7 +29,7 @@ Rules:
 - hydration_timer times should match active_window
 - do_not_disturb only if explicitly mentioned
 - Multiple do_not_disturb windows allowed
-- flag invalid content as not parsable and suggest a valid format
+- flag invalid content as not parsable
 
 Schema:
 {
@@ -88,19 +89,24 @@ def parse_schedule():
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
-            ],
-            response_format={"type": "json_object"}
+            ]
         )
 
         logs.append("Received response from OpenAI")
 
+        raw_output = response.output_text.strip()
+
+        if raw_output.startswith("```"):
+            raw_output = raw_output.replace("```json", "").replace("```", "").strip()
+
         try:
-            parsed = response.output[0].content[0].json
+            parsed = json.loads(raw_output)
             logs.append("Parsed JSON")
-        except Exception as e:
-            logs.append("Failed to parse AI response")
+        except Exception:
+            logs.append("Failed to parse JSON")
+            logs.append(raw_output)
             return jsonify({
-                "error": "AI response parsing failed",
+                "error": "Invalid JSON from AI",
                 "logs": logs
             }), 500
 
