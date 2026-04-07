@@ -12,6 +12,15 @@ CORS(
     resources={r"/*": {"origins": "*"}},
     supports_credentials=True
 )
+
+@app.route("/parse", methods=["OPTIONS"])
+def handle_options():
+    response = jsonify({"status": "ok"})
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type")
+    response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
+    return response
+
 @app.after_request
 def after_request(response):
     response.headers.add("Access-Control-Allow-Origin", "*")
