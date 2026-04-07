@@ -12,6 +12,12 @@ CORS(
     resources={r"/*": {"origins": "*"}},
     supports_credentials=True
 )
+@app.after_request
+def after_request(response):
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+    response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+    return response
 
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
