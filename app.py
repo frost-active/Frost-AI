@@ -1,14 +1,11 @@
 import os
-import json
-import re
 from datetime import datetime
-from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask import Flask, request, jsonify, Response
 from openai import OpenAI
 
 app = Flask(__name__)
 app.json.sort_keys = False
-
 CORS(app)
 
 client = OpenAI(
@@ -31,7 +28,6 @@ Rules:
 - hydration_timer times should match active_window
 - do_not_disturb only if explicitly mentioned
 - Multiple do_not_disturb windows allowed
-- ONLY RETURN JSON. NO EXTRA TEXT.
 
 Schema:
 {
@@ -58,69 +54,66 @@ def home():
 
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
-    start_time = datetime.now()
-    logs = []
-
     try:
-        logs.append("Request received")
+        start_time = datetime.now()
 
-        try:
-            data = request.get_json(force=True)
-        except:
-            data = json.loads(request.data.decode("utf-8"))
-
-        logs.append("JSON parsed")
-
+        data = request.get_json()
         user_text = data.get("text") if data else None
-        logs.append(f"User input: {user_text}")
 
+        # ✅ Input validation
         if not isinstance(user_text, str) or not user_text.strip():
-            return jsonify({"error": "Invalid input", "logs": logs}), 400
+            return jsonify({"error": "Invalid input text"}), 400
 
-        logs.append("Calling OpenAI API")
+        if len(user_text) > 1000:
+            return jsonify({"error": "Input too long"}), 400
 
+        # ✅ OpenAI call with strict JSON output
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
-            ]
+            ],
+            response_format={"type": "json_object"}
         )
 
-        logs.append("Received response")
+        # ✅ NO double processing — directly use structured output
+        parsed = response.output[0].content[0].json
 
-        raw_output = response.output_text.strip().replace("\n", "")
+        active_window = parsed.get("active_window", {})
+        hydration_timer = parsed.get("hydration_timer", {})
 
-        try:
-            parsed = json.loads(raw_output)
-            logs.append("Parsed JSON directly")
-        except:
-            logs.append("Direct parse failed, attempting recovery")
+        output = {
+            "task": parsed.get("task", "hydration"),
+            "active_window": {
+                "start": active_window.get("start"),
+                "end": active_window.get("end")
+            },
+            "hydration_timer": {
+                "enabled": hydration_timer.get("enabled", False),
+                "interval_minutes": hydration_timer.get("interval_minutes"),
+                "start_time": hydration_timer.get("start_time"),
+                "end_time": hydration_timer.get("end_time"),
+                "alert_message": hydration_timer.get("alert_message", "Time to drink water 💧")
+            },
+            "do_not_disturb": parsed.get("do_not_disturb", []),
+            "exclusions": parsed.get("exclusions", [])
+        }
 
-            match = re.search(r"\{.*\}", raw_output, re.DOTALL)
-            if match:
-                parsed = json.loads(match.group())
-                logs.append("Recovered JSON")
-            else:
-                return jsonify({
-                    "error": "Invalid JSON from AI",
-                    "logs": logs,
-                    "raw_output": raw_output
-                }), 500
+        print("Processing time:", datetime.now() - start_time)
 
-        duration = (datetime.now() - start_time).total_seconds()
-        logs.append(f"Processing time: {duration}s")
-
-        return jsonify({
-            "logs": logs,
-            "data": parsed
-        })
+        # Still returning downloadable JSON (same behavior)
+        return Response(
+            response=jsonify(output).get_data(as_text=True),
+            mimetype="application/json",
+            headers={
+                "Content-Disposition": "attachment; filename=hydration_schedule.json"
+            }
+        )
 
     except Exception as e:
-        logs.append(str(e))
-        return jsonify({"error": "Internal error", "logs": logs}), 500
+        return jsonify({"error": str(e)}), 400
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000)
