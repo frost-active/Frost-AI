@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -30,6 +31,7 @@ Rules:
 - hydration_timer times should match active_window
 - do_not_disturb only if explicitly mentioned
 - Multiple do_not_disturb windows allowed
+- ONLY RETURN JSON. NO EXTRA TEXT.
 
 Schema:
 {
@@ -88,13 +90,35 @@ def parse_schedule():
 
         logs.append("Received response from OpenAI")
 
-        raw_output = response.output_text.strip()
+        raw_output = response.output_text.strip().replace("\n", "")
+        logs.append(f"Raw output: {raw_output[:100]}...")
 
-        if raw_output.startswith("```"):
-            raw_output = raw_output.replace("```json", "").replace("```", "").strip()
+        try:
+            parsed = json.loads(raw_output)
+            logs.append("Parsed JSON successfully")
+        except:
+            logs.append("Direct JSON parse failed, attempting recovery")
 
-        parsed = json.loads(raw_output)
-        logs.append("Parsed JSON")
+            json_match = re.search(r"\{.*\}", raw_output, re.DOTALL)
+
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group())
+                    logs.append("Recovered JSON successfully")
+                except:
+                    logs.append("Recovery failed")
+                    return jsonify({
+                        "error": "Invalid JSON from AI",
+                        "raw_output": raw_output,
+                        "logs": logs
+                    }), 500
+            else:
+                logs.append("No JSON found in response")
+                return jsonify({
+                    "error": "No JSON found",
+                    "raw_output": raw_output,
+                    "logs": logs
+                }), 500
 
         duration = (datetime.now() - start_time).total_seconds()
         logs.append(f"Processing time: {duration}s")
@@ -105,6 +129,7 @@ def parse_schedule():
         })
 
     except Exception as e:
+        logs.append("Unhandled exception")
         logs.append(str(e))
         return jsonify({
             "error": "Internal error",
