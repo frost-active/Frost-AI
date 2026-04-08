@@ -1,19 +1,14 @@
 import os
 import json
 from datetime import datetime
-from flask_cors import CORS
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from openai import OpenAI
 
 app = Flask(__name__)
 app.json.sort_keys = False
 
-CORS(
-    app,
-    resources={r"/*": {"origins": "*"}},
-    allow_headers=["Content-Type"],
-    methods=["GET", "POST", "OPTIONS"]
-)
+CORS(app)
 
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
@@ -35,7 +30,6 @@ Rules:
 - hydration_timer times should match active_window
 - do_not_disturb only if explicitly mentioned
 - Multiple do_not_disturb windows allowed
-- flag invalid content as not parsable
 
 Schema:
 {
@@ -58,25 +52,24 @@ Schema:
 
 @app.after_request
 def after_request(response):
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    response.headers.add("Access-Control-Allow-Headers", "Content-Type")
-    response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-    return response
-
-@app.route("/parse", methods=["OPTIONS"])
-def handle_options():
-    response = jsonify({"status": "ok"})
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    response.headers.add("Access-Control-Allow-Headers", "Content-Type")
-    response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
     return response
 
 @app.route("/")
 def home():
     return "Hydration Scheduler API is running 🚀"
 
-@app.route("/parse", methods=["POST"])
+@app.route("/parse", methods=["POST", "OPTIONS"])
 def parse_schedule():
+    if request.method == "OPTIONS":
+        response = jsonify({"status": "ok"})
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        return response
+
     start_time = datetime.now()
     logs = []
 
@@ -93,13 +86,6 @@ def parse_schedule():
             logs.append("Invalid input")
             return jsonify({
                 "error": "Invalid input text",
-                "logs": logs
-            }), 400
-
-        if len(user_text) > 1000:
-            logs.append("Input too long")
-            return jsonify({
-                "error": "Input too long",
                 "logs": logs
             }), 400
 
@@ -120,43 +106,15 @@ def parse_schedule():
         if raw_output.startswith("```"):
             raw_output = raw_output.replace("```json", "").replace("```", "").strip()
 
-        try:
-            parsed = json.loads(raw_output)
-            logs.append("Parsed JSON")
-        except Exception:
-            logs.append("Failed to parse JSON")
-            logs.append(raw_output)
-            return jsonify({
-                "error": "Invalid JSON from AI",
-                "logs": logs
-            }), 500
-
-        active_window = parsed.get("active_window", {})
-        hydration_timer = parsed.get("hydration_timer", {})
-
-        output = {
-            "task": parsed.get("task", "hydration"),
-            "active_window": {
-                "start": active_window.get("start"),
-                "end": active_window.get("end")
-            },
-            "hydration_timer": {
-                "enabled": hydration_timer.get("enabled", False),
-                "interval_minutes": hydration_timer.get("interval_minutes"),
-                "start_time": hydration_timer.get("start_time"),
-                "end_time": hydration_timer.get("end_time"),
-                "alert_message": hydration_timer.get("alert_message", "Time to drink water 💧")
-            },
-            "do_not_disturb": parsed.get("do_not_disturb", []),
-            "exclusions": parsed.get("exclusions", [])
-        }
+        parsed = json.loads(raw_output)
+        logs.append("Parsed JSON")
 
         duration = (datetime.now() - start_time).total_seconds()
         logs.append(f"Processing time: {duration}s")
 
         return jsonify({
             "logs": logs,
-            "data": output
+            "data": parsed
         })
 
     except Exception as e:
