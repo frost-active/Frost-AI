@@ -75,7 +75,6 @@ def parse_schedule():
         logs.append(f"User input: {user_text}")
 
         if not isinstance(user_text, str) or not user_text.strip():
-            logs.append("Invalid input")
             return jsonify({"error": "Invalid input", "logs": logs}), 400
 
         logs.append("Calling OpenAI API")
@@ -88,36 +87,25 @@ def parse_schedule():
             ]
         )
 
-        logs.append("Received response from OpenAI")
+        logs.append("Received response")
 
         raw_output = response.output_text.strip().replace("\n", "")
-        logs.append(f"Raw output: {raw_output[:100]}...")
 
         try:
             parsed = json.loads(raw_output)
-            logs.append("Parsed JSON successfully")
+            logs.append("Parsed JSON directly")
         except:
-            logs.append("Direct JSON parse failed, attempting recovery")
+            logs.append("Direct parse failed, attempting recovery")
 
-            json_match = re.search(r"\{.*\}", raw_output, re.DOTALL)
-
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group())
-                    logs.append("Recovered JSON successfully")
-                except:
-                    logs.append("Recovery failed")
-                    return jsonify({
-                        "error": "Invalid JSON from AI",
-                        "raw_output": raw_output,
-                        "logs": logs
-                    }), 500
+            match = re.search(r"\{.*\}", raw_output, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group())
+                logs.append("Recovered JSON")
             else:
-                logs.append("No JSON found in response")
                 return jsonify({
-                    "error": "No JSON found",
-                    "raw_output": raw_output,
-                    "logs": logs
+                    "error": "Invalid JSON from AI",
+                    "logs": logs,
+                    "raw_output": raw_output
                 }), 500
 
         duration = (datetime.now() - start_time).total_seconds()
@@ -129,12 +117,8 @@ def parse_schedule():
         })
 
     except Exception as e:
-        logs.append("Unhandled exception")
         logs.append(str(e))
-        return jsonify({
-            "error": "Internal error",
-            "logs": logs
-        }), 500
+        return jsonify({"error": "Internal error", "logs": logs}), 500
 
 
 if __name__ == "__main__":
