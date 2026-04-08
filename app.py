@@ -50,33 +50,23 @@ Schema:
 }
 """
 
-@app.after_request
-def after_request(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
-    return response
-
 @app.route("/")
 def home():
     return "Hydration Scheduler API is running 🚀"
 
-@app.route("/parse", methods=["POST", "OPTIONS"])
+@app.route("/parse", methods=["POST"])
 def parse_schedule():
-    if request.method == "OPTIONS":
-        response = jsonify({"status": "ok"})
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-        return response
-
     start_time = datetime.now()
     logs = []
 
     try:
         logs.append("Request received")
 
-        data = request.get_json()
+        try:
+            data = request.get_json(force=True)
+        except:
+            data = json.loads(request.data.decode("utf-8"))
+
         logs.append("JSON parsed")
 
         user_text = data.get("text") if data else None
@@ -84,10 +74,7 @@ def parse_schedule():
 
         if not isinstance(user_text, str) or not user_text.strip():
             logs.append("Invalid input")
-            return jsonify({
-                "error": "Invalid input text",
-                "logs": logs
-            }), 400
+            return jsonify({"error": "Invalid input", "logs": logs}), 400
 
         logs.append("Calling OpenAI API")
 
@@ -118,10 +105,9 @@ def parse_schedule():
         })
 
     except Exception as e:
-        logs.append("Unhandled exception")
         logs.append(str(e))
         return jsonify({
-            "error": "Internal server error",
+            "error": "Internal error",
             "logs": logs
         }), 500
 
