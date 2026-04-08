@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime
 from flask_cors import CORS
 from flask import Flask, request, jsonify, Response
@@ -20,7 +21,7 @@ You are a scheduling assistant.
 Extract hydration scheduling AND reminder timer information from user input.
 
 Rules:
-- Always return VALID JSON
+- Always return ONLY VALID JSON (no explanation)
 - Use 24-hour time format (HH:MM)
 - If a field is missing, use null
 - If the user implies reminders, enable hydration_timer
@@ -60,25 +61,32 @@ def parse_schedule():
         data = request.get_json()
         user_text = data.get("text") if data else None
 
-        # ✅ Input validation
+        # Input validation
         if not isinstance(user_text, str) or not user_text.strip():
             return jsonify({"error": "Invalid input text"}), 400
 
         if len(user_text) > 1000:
             return jsonify({"error": "Input too long"}), 400
 
-        # ✅ OpenAI call with strict JSON output
+        # OpenAI call
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
-            ],
-            response_format={"type": "json_object"}
+            ]
         )
 
-        # ✅ NO double processing — directly use structured output
-        parsed = response.output[0].content[0].json
+        # Extract text safely
+        raw_output = response.output_text
+
+        try:
+            parsed = json.loads(raw_output)
+        except Exception:
+            return jsonify({
+                "error": "Model did not return valid JSON",
+                "raw_output": raw_output
+            }), 500
 
         active_window = parsed.get("active_window", {})
         hydration_timer = parsed.get("hydration_timer", {})
@@ -102,9 +110,8 @@ def parse_schedule():
 
         print("Processing time:", datetime.now() - start_time)
 
-        # Still returning downloadable JSON (same behavior)
         return Response(
-            response=jsonify(output).get_data(as_text=True),
+            response=json.dumps(output, indent=2),
             mimetype="application/json",
             headers={
                 "Content-Disposition": "attachment; filename=hydration_schedule.json"
