@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime
 from flask_cors import CORS
 from flask import Flask, request, jsonify, Response
@@ -10,7 +11,7 @@ CORS(app)
 
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
-    timeout=10,
+    timeout=20,
     max_retries=2
 )
 
@@ -28,12 +29,12 @@ Rules:
 - hydration_timer times should match active_window
 - do_not_disturb only if explicitly mentioned
 - Multiple do_not_disturb windows allowed
-- flag invalid content as not parsable
-
+- flag invalid content as parsable=false
 
 Schema:
 {
   "task": "hydration",
+  "parsable": true,
   "active_window": {
     "start": "HH:MM",
     "end": "HH:MM"
@@ -54,48 +55,66 @@ Schema:
 def home():
     return "Hydration Scheduler API is running 🚀"
 
+
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
         start_time = datetime.now()
 
         data = request.get_json()
-        user_text = data.get("text") if data else None
 
-        
+        if not data or "text" not in data:
+            return jsonify({"error": "Missing 'text' field"}), 400
+
+        user_text = data.get("text")
+
         if not isinstance(user_text, str) or not user_text.strip():
             return jsonify({"error": "Invalid input text"}), 400
 
         if len(user_text) > 1000:
             return jsonify({"error": "Input too long"}), 400
 
-        
+        # 🔥 OpenAI call (FIXED)
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
-            ],
-            response_format={"type": "json_object"}
+            ]
         )
 
-        parsed = response.output[0].content[0].json
+        raw_text = response.output_text
+
+        print("RAW MODEL OUTPUT:", raw_text)
+
+        # 🔥 Safe JSON parsing
+        try:
+            parsed = json.loads(raw_text)
+        except Exception:
+            return jsonify({
+                "error": "Model returned invalid JSON",
+                "raw_output": raw_text
+            }), 500
 
         active_window = parsed.get("active_window", {})
         hydration_timer = parsed.get("hydration_timer", {})
 
         output = {
             "task": parsed.get("task", "hydration"),
+            "parsable": parsed.get("parsable", True),
             "active_window": {
                 "start": active_window.get("start"),
                 "end": active_window.get("end")
             },
             "hydration_timer": {
                 "enabled": hydration_timer.get("enabled", False),
-                "interval_minutes": hydration_timer.get("interval_minutes"),
+                "interval_minutes": hydration_timer.get("interval_minutes", 30),
                 "start_time": hydration_timer.get("start_time"),
                 "end_time": hydration_timer.get("end_time"),
-                "alert_message": hydration_timer.get("alert_message", "Time to drink water 💧")
+                "alert_message": hydration_timer.get(
+                    "alert_message",
+                    "Time to drink water 💧"
+                )
             },
             "do_not_disturb": parsed.get("do_not_disturb", []),
             "exclusions": parsed.get("exclusions", [])
@@ -103,9 +122,9 @@ def parse_schedule():
 
         print("Processing time:", datetime.now() - start_time)
 
-        
+        # 🔥 Clean JSON file response
         return Response(
-            response=jsonify(output).get_data(as_text=True),
+            response=json.dumps(output, indent=2),
             mimetype="application/json",
             headers={
                 "Content-Disposition": "attachment; filename=hydration_schedule.json"
