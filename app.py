@@ -8,7 +8,13 @@ from openai import OpenAI
 
 app = Flask(__name__)
 app.json.sort_keys = False
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "https://ai.frostactive.com"
+        ]
+    }
+})
 
 # ---------------- LOGGING SETUP ----------------
 logging.basicConfig(
