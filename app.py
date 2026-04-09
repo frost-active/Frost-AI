@@ -11,8 +11,6 @@ CORS(app)
 
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
-    timeout=20,
-    max_retries=2
 )
 
 SYSTEM_PROMPT = """
