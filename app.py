@@ -7,7 +7,11 @@ from openai import OpenAI
 
 app = Flask(__name__)
 app.json.sort_keys = False
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+    supports_credentials=True
+)
 
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
