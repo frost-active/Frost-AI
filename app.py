@@ -63,6 +63,13 @@ def parse_schedule():
     try:
         start_time = datetime.now()
 
+        # ✅ LOGGING SETUP
+        logs = []
+        def log(step):
+            logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {step}")
+
+        log("Request received")
+
         data = request.get_json()
 
         if not data or "text" not in data:
@@ -76,7 +83,11 @@ def parse_schedule():
         if len(user_text) > 1000:
             return jsonify({"error": "Input too long"}), 400
 
-        # 🔥 OpenAI call (FIXED)
+        log("Input validated")
+
+        # 🔥 OpenAI call
+        log("Calling OpenAI API")
+
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
@@ -87,11 +98,14 @@ def parse_schedule():
 
         raw_text = response.output_text
 
+        log("Received response from OpenAI")
+
         print("RAW MODEL OUTPUT:", raw_text)
 
         # 🔥 Safe JSON parsing
         try:
             parsed = json.loads(raw_text)
+            log("JSON parsed successfully")
         except Exception:
             return jsonify({
                 "error": "Model returned invalid JSON",
@@ -122,16 +136,15 @@ def parse_schedule():
             "exclusions": parsed.get("exclusions", [])
         }
 
+        log("Response ready")
+
         print("Processing time:", datetime.now() - start_time)
 
-        # 🔥 Clean JSON file response
-        return Response(
-            response=json.dumps(output, indent=2),
-            mimetype="application/json",
-            headers={
-                "Content-Disposition": "attachment; filename=hydration_schedule.json"
-            }
-        )
+        # ✅ RETURN DATA + LOGS
+        return jsonify({
+            "data": output,
+            "logs": logs
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
