@@ -138,7 +138,11 @@ def parse_schedule():
 
         log("Response ready")
 
-        print("Processing time:", datetime.now() - start_time)
+        # ✅ TOTAL TIME LOG (NEW)
+        processing_time = datetime.now() - start_time
+        log(f"Total time: {round(processing_time.total_seconds(), 2)}s")
+
+        print("Processing time:", processing_time)
 
         # ✅ RETURN DATA + LOGS
         return jsonify({
