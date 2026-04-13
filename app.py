@@ -2,7 +2,7 @@ import os
 import json
 from datetime import datetime
 from flask_cors import CORS
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify
 from openai import OpenAI
 
 app = Flask(__name__)
@@ -53,6 +53,87 @@ Schema:
 }
 """
 
+# ✅ TRANSFORMATION FUNCTION
+def convert_to_device_schema(parsed):
+    def parse_time(t):
+        if not t:
+            return 0, 0
+        h, m = t.split(":")
+        return int(h), int(m)
+
+    active = parsed.get("active_window", {})
+    timer = parsed.get("hydration_timer", {})
+
+    sh, sm = parse_time(active.get("start"))
+    eh, em = parse_time(active.get("end"))
+
+    interval_ms = timer.get("interval_minutes", 30) * 60 * 1000
+
+    return {
+        "_meta": {
+            "schema_ver": None,
+            "device": "FROST",
+            "ts_written": 0
+        },
+        "dfplayer": {
+            "volume": 30,
+            "boot_volume": 15,
+            "night_volume": 8,
+            "night_start_hour": 22,
+            "night_end_hour": 7,
+            "night_mode_enabled": False
+        },
+        "audio": {
+            "pomo_focus_music_enabled": True,
+            "pomo_focus_music_track": 31,
+            "pomo_focus_music_loop": True,
+            "meditation_music_enabled": False,
+            "meditation_music_track": 35
+        },
+        "tone_mode": "professional",
+        "ui": {
+            "action_log": {
+                "enabled": True,
+                "show_ms": 3000
+            }
+        },
+        "custom_texts": {
+            "hydration": "Time to drink water!"
+        },
+        "hydration": {
+            "enabled": timer.get("enabled", False),
+            "interval_ms": interval_ms,
+            "prompt_duration_ms": 60000,
+            "prompt_gap_ms": 60000,
+            "require_ack": True,
+            "goal_ml": 2000,
+            "start_hour": sh,
+            "start_min": sm,
+            "end_hour": eh,
+            "end_min": em,
+            "mode": "interval",
+            "days": [],
+            "abs": {
+                "enabled": False,
+                "times": []
+            }
+        },
+        "stretch": {"enabled": False},
+        "eye": {"enabled": False},
+        "dnd": {"enabled": False},
+        "clean": {"enabled": True},
+        "pomo": {"enabled": False},
+        "healing": {"enabled": False},
+        "walk": {"enabled": False},
+        "meditation": {"enabled": False},
+        "medication": [],
+        "medication_cfg": {"enabled": True},
+        "custom": {"enabled": False},
+        "images": {},
+        "priority": []
+    }
+
+
 @app.route("/")
 def home():
     return "Hydration Scheduler API is running 🚀"
@@ -63,7 +144,6 @@ def parse_schedule():
     try:
         start_time = datetime.now()
 
-        # ✅ LOGGING SETUP
         logs = []
         def log(step):
             logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {step}")
@@ -85,7 +165,6 @@ def parse_schedule():
 
         log("Input validated")
 
-        # 🔥 OpenAI call
         log("Calling OpenAI API")
 
         response = client.responses.create(
@@ -102,7 +181,6 @@ def parse_schedule():
 
         print("RAW MODEL OUTPUT:", raw_text)
 
-        # 🔥 Safe JSON parsing
         try:
             parsed = json.loads(raw_text)
             log("JSON parsed successfully")
@@ -138,15 +216,19 @@ def parse_schedule():
 
         log("Response ready")
 
-        # ✅ TOTAL TIME LOG (NEW)
+        # ✅ TRANSFORM TO FINAL SCHEMA
+        final_schema_output = convert_to_device_schema(output)
+        log("Converted to device schema")
+        log("Schema transformation complete")
+
+        # ✅ TOTAL TIME LOG
         processing_time = datetime.now() - start_time
         log(f"Total time: {round(processing_time.total_seconds(), 2)}s")
 
         print("Processing time:", processing_time)
 
-        # ✅ RETURN DATA + LOGS
         return jsonify({
-            "data": output,
+            "data": final_schema_output,
             "logs": logs
         })
 
