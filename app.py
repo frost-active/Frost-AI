@@ -32,6 +32,9 @@ Rules:
 - do_not_disturb only if explicitly mentioned
 - Multiple do_not_disturb windows allowed
 - flag invalid content as parsable=false
+- ALWAYS extract do_not_disturb windows if user mentions "don't notify", "avoid", "no reminders"
+- ALWAYS extract exclusions if user mentions specific times to skip
+- NEVER ignore time constraints
 
 Schema:
 {
