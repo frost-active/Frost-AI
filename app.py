@@ -2,7 +2,7 @@ import os
 import json
 from datetime import datetime
 from flask_cors import CORS
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify
 from openai import OpenAI
 
 app = Flask(__name__)
@@ -17,6 +17,7 @@ client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
 )
 
+# ✅ UPDATED PROMPT
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
@@ -24,7 +25,7 @@ Extract hydration schedule, reminder intervals, do-not-disturb windows, and excl
 
 Return ONLY valid JSON.
 
-
+-----------------------------------
 Rules:
 
 - Always return VALID JSON only (no text, no explanation)
@@ -33,7 +34,7 @@ Rules:
 - If reminders are implied, set hydration_timer.enabled = true
 - Default interval_minutes = 30 if not specified
 
-
+-----------------------------------
 IMPORTANT EXTRACTION RULES:
 
 - ALWAYS extract do_not_disturb if user says:
@@ -50,7 +51,7 @@ IMPORTANT EXTRACTION RULES:
 
 - NEVER ignore time constraints
 
-
+-----------------------------------
 OUTPUT FORMAT:
 
 {
@@ -80,7 +81,7 @@ OUTPUT FORMAT:
   "exclusions": ["HH:MM"]
 }
 
-
+-----------------------------------
 EXAMPLES:
 
 Input:
@@ -102,7 +103,7 @@ Output:
   "exclusions": []
 }
 
-
+-----------------------------------
 
 Input:
 "I sit from 8 to 4, remind me every 45 minutes, don't notify me from 12 to 1 PM, skip 2:30 PM"
@@ -125,7 +126,141 @@ Output:
   "exclusions": ["14:30"]
 }
 
+-----------------------------------
 """
+
+
+# ✅ TRANSFORMATION FUNCTION
+def convert_to_device_schema(parsed):
+
+    def parse_time(t):
+        if not t:
+            return 0, 0
+        h, m = t.split(":")
+        return int(h), int(m)
+
+    active = parsed.get("active_window", {})
+    timer = parsed.get("hydration_timer", {})
+    dnd_list = parsed.get("do_not_disturb", [])
+    exclusions = parsed.get("exclusions", [])
+
+    sh, sm = parse_time(active.get("start"))
+    eh, em = parse_time(active.get("end"))
+
+    interval_ms = timer.get("interval_minutes", 30) * 60 * 1000
+
+    # DND
+    dnd = {
+        "enabled": False,
+        "sh": 0,
+        "sm": 0,
+        "eh": 0,
+        "em": 0,
+        "allow_med": True,
+        "allow_hydration": False,
+        "allow_stretch": False,
+        "allow_eye": False,
+        "allow_cleaning": False,
+        "allow_walk": False,
+        "allow_meditation": False,
+        "allow_healing": False,
+        "allow_custom": False,
+        "allow_pomodoro": False
+    }
+
+    if dnd_list:
+        first = dnd_list[0]
+        sh_d, sm_d = parse_time(first.get("start"))
+        eh_d, em_d = parse_time(first.get("end"))
+
+        dnd.update({
+            "enabled": True,
+            "sh": sh_d,
+            "sm": sm_d,
+            "eh": eh_d,
+            "em": em_d
+        })
+
+    # Exclusions → abs times
+    abs_times = []
+    for t in exclusions:
+        h, m = parse_time(t)
+        abs_times.append({"h": h, "m": m})
+
+    abs_config = {
+        "enabled": len(abs_times) > 0,
+        "times": abs_times
+    }
+
+    return {
+        "_meta": {
+            "schema_ver": None,
+            "device": "FROST",
+            "ts_written": 0
+        },
+
+        "dfplayer": {
+            "volume": 30,
+            "boot_volume": 15,
+            "night_volume": 8,
+            "night_start_hour": 22,
+            "night_end_hour": 7,
+            "night_mode_enabled": False
+        },
+
+        "audio": {
+            "pomo_focus_music_enabled": True,
+            "pomo_focus_music_track": 31,
+            "pomo_focus_music_loop": True,
+            "meditation_music_enabled": False,
+            "meditation_music_track": 35
+        },
+
+        "tone_mode": "professional",
+
+        "ui": {
+            "action_log": {
+                "enabled": True,
+                "show_ms": 3000
+            }
+        },
+
+        "custom_texts": {
+            "hydration": "Time to drink water!"
+        },
+
+        "hydration": {
+            "enabled": timer.get("enabled", False),
+            "interval_ms": interval_ms,
+            "prompt_duration_ms": 60000,
+            "prompt_gap_ms": 60000,
+            "require_ack": True,
+            "goal_ml": 2000,
+            "start_hour": sh,
+            "start_min": sm,
+            "end_hour": eh,
+            "end_min": em,
+            "mode": "interval",
+            "days": [],
+            "abs": abs_config
+        },
+
+        "dnd": dnd,
+
+        "stretch": {"enabled": False},
+        "eye": {"enabled": False},
+        "clean": {"enabled": True},
+        "pomo": {"enabled": False},
+        "healing": {"enabled": False},
+        "walk": {"enabled": False},
+        "meditation": {"enabled": False},
+        "medication": [],
+        "medication_cfg": {"enabled": True},
+        "custom": {"enabled": False},
+        "images": {},
+        "priority": []
+    }
+
 
 @app.route("/")
 def home():
@@ -137,7 +272,6 @@ def parse_schedule():
     try:
         start_time = datetime.now()
 
-        # ✅ LOGGING SETUP
         logs = []
         def log(step):
             logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {step}")
@@ -158,8 +292,6 @@ def parse_schedule():
             return jsonify({"error": "Input too long"}), 400
 
         log("Input validated")
-
-        # 🔥 OpenAI call
         log("Calling OpenAI API")
 
         response = client.responses.create(
@@ -174,9 +306,6 @@ def parse_schedule():
 
         log("Received response from OpenAI")
 
-        print("RAW MODEL OUTPUT:", raw_text)
-
-        # 🔥 Safe JSON parsing
         try:
             parsed = json.loads(raw_text)
             log("JSON parsed successfully")
@@ -186,37 +315,16 @@ def parse_schedule():
                 "raw_output": raw_text
             }), 500
 
-        active_window = parsed.get("active_window", {})
-        hydration_timer = parsed.get("hydration_timer", {})
+        final_schema_output = convert_to_device_schema(parsed)
 
-        output = {
-            "task": parsed.get("task", "hydration"),
-            "parsable": parsed.get("parsable", True),
-            "active_window": {
-                "start": active_window.get("start"),
-                "end": active_window.get("end")
-            },
-            "hydration_timer": {
-                "enabled": hydration_timer.get("enabled", False),
-                "interval_minutes": hydration_timer.get("interval_minutes", 30),
-                "start_time": hydration_timer.get("start_time"),
-                "end_time": hydration_timer.get("end_time"),
-                "alert_message": hydration_timer.get(
-                    "alert_message",
-                    "Time to drink water 💧"
-                )
-            },
-            "do_not_disturb": parsed.get("do_not_disturb", []),
-            "exclusions": parsed.get("exclusions", [])
-        }
+        log("Converted to device schema")
+        log("Schema transformation complete")
 
-        log("Response ready")
+        processing_time = datetime.now() - start_time
+        log(f"Total time: {round(processing_time.total_seconds(), 2)}s")
 
-        print("Processing time:", datetime.now() - start_time)
-
-        # ✅ RETURN DATA + LOGS
         return jsonify({
-            "data": output,
+            "data": final_schema_output,
             "logs": logs
         })
 
