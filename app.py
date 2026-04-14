@@ -20,37 +20,111 @@ client = OpenAI(
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
-Extract hydration scheduling AND reminder timer information from user input.
+Extract hydration schedule, reminder intervals, do-not-disturb windows, and exclusions from user input.
+
+Return ONLY valid JSON.
+
 
 Rules:
-- Always return VALID JSON
-- Use 24-hour time format (HH:MM)
-- If a field is missing, use null
-- If the user implies reminders, enable hydration_timer
-- Default interval_minutes to 30 if not specified
-- hydration_timer times should match active_window
-- do_not_disturb only if explicitly mentioned
-- Multiple do_not_disturb windows allowed
-- flag invalid content as parsable=false
 
-Schema:
+- Always return VALID JSON only (no text, no explanation)
+- Use 24-hour time format (HH:MM)
+- If a field is missing, use null or empty list
+- If reminders are implied, set hydration_timer.enabled = true
+- Default interval_minutes = 30 if not specified
+
+
+IMPORTANT EXTRACTION RULES:
+
+- ALWAYS extract do_not_disturb if user says:
+  "don't notify", "avoid", "no reminders", "mute", etc.
+
+- ALWAYS extract exclusions if user mentions specific times to skip:
+  e.g. "skip 2:30 PM" → "14:30"
+
+- Convert time ranges:
+  "12 to 1 PM" → start: "12:00", end: "13:00"
+
+- Convert single times:
+  "2:30 PM" → "14:30"
+
+- NEVER ignore time constraints
+
+
+OUTPUT FORMAT:
+
 {
   "task": "hydration",
   "parsable": true,
+
   "active_window": {
     "start": "HH:MM",
     "end": "HH:MM"
   },
+
   "hydration_timer": {
     "enabled": true,
-    "interval_minutes": 30,
+    "interval_minutes": number,
     "start_time": "HH:MM",
     "end_time": "HH:MM",
+    "alert_message": "Time to drink water 💧"
+  },
+
+  "do_not_disturb": [
+    {
+      "start": "HH:MM",
+      "end": "HH:MM"
+    }
+  ],
+
+  "exclusions": ["HH:MM"]
+}
+
+
+EXAMPLES:
+
+Input:
+"I work 9 to 5, remind me every 40 minutes"
+
+Output:
+{
+  "task": "hydration",
+  "parsable": true,
+  "active_window": { "start": "09:00", "end": "17:00" },
+  "hydration_timer": {
+    "enabled": true,
+    "interval_minutes": 40,
+    "start_time": "09:00",
+    "end_time": "17:00",
     "alert_message": "Time to drink water 💧"
   },
   "do_not_disturb": [],
   "exclusions": []
 }
+
+
+
+Input:
+"I sit from 8 to 4, remind me every 45 minutes, don't notify me from 12 to 1 PM, skip 2:30 PM"
+
+Output:
+{
+  "task": "hydration",
+  "parsable": true,
+  "active_window": { "start": "08:00", "end": "16:00" },
+  "hydration_timer": {
+    "enabled": true,
+    "interval_minutes": 45,
+    "start_time": "08:00",
+    "end_time": "16:00",
+    "alert_message": "Time to drink water 💧"
+  },
+  "do_not_disturb": [
+    { "start": "12:00", "end": "13:00" }
+  ],
+  "exclusions": ["14:30"]
+}
+
 """
 
 @app.route("/")
