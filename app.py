@@ -1,6 +1,7 @@
 import os
 import json
 from datetime import datetime
+import pytz
 from flask_cors import CORS
 from flask import Flask, request, jsonify
 from openai import OpenAI
@@ -17,120 +18,11 @@ client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
 )
 
-# ✅ UPDATED PROMPT
-SYSTEM_PROMPT = """
-You are a scheduling assistant.
+IST = pytz.timezone('Asia/Kolkata')
 
-Extract hydration schedule, reminder intervals, do-not-disturb windows, and exclusions from user input.
-
-Return ONLY valid JSON.
-
------------------------------------
-Rules:
-
-- Always return VALID JSON only (no text, no explanation)
-- Use 24-hour time format (HH:MM)
-- If a field is missing, use null or empty list
-- If reminders are implied, set hydration_timer.enabled = true
-- Default interval_minutes = 30 if not specified
-
------------------------------------
-IMPORTANT EXTRACTION RULES:
-
-- ALWAYS extract do_not_disturb if user says:
-  "don't notify", "avoid", "no reminders", "mute", etc.
-
-- ALWAYS extract exclusions if user mentions specific times to skip:
-  e.g. "skip 2:30 PM" → "14:30"
-
-- Convert time ranges:
-  "12 to 1 PM" → start: "12:00", end: "13:00"
-
-- Convert single times:
-  "2:30 PM" → "14:30"
-
-- NEVER ignore time constraints
-
------------------------------------
-OUTPUT FORMAT:
-
-{
-  "task": "hydration",
-  "parsable": true,
-
-  "active_window": {
-    "start": "HH:MM",
-    "end": "HH:MM"
-  },
-
-  "hydration_timer": {
-    "enabled": true,
-    "interval_minutes": number,
-    "start_time": "HH:MM",
-    "end_time": "HH:MM",
-    "alert_message": "Time to drink water 💧"
-  },
-
-  "do_not_disturb": [
-    {
-      "start": "HH:MM",
-      "end": "HH:MM"
-    }
-  ],
-
-  "exclusions": ["HH:MM"]
-}
-
------------------------------------
-EXAMPLES:
-
-Input:
-"I work 9 to 5, remind me every 40 minutes"
-
-Output:
-{
-  "task": "hydration",
-  "parsable": true,
-  "active_window": { "start": "09:00", "end": "17:00" },
-  "hydration_timer": {
-    "enabled": true,
-    "interval_minutes": 40,
-    "start_time": "09:00",
-    "end_time": "17:00",
-    "alert_message": "Time to drink water 💧"
-  },
-  "do_not_disturb": [],
-  "exclusions": []
-}
-
------------------------------------
-
-Input:
-"I sit from 8 to 4, remind me every 45 minutes, don't notify me from 12 to 1 PM, skip 2:30 PM"
-
-Output:
-{
-  "task": "hydration",
-  "parsable": true,
-  "active_window": { "start": "08:00", "end": "16:00" },
-  "hydration_timer": {
-    "enabled": true,
-    "interval_minutes": 45,
-    "start_time": "08:00",
-    "end_time": "16:00",
-    "alert_message": "Time to drink water 💧"
-  },
-  "do_not_disturb": [
-    { "start": "12:00", "end": "13:00" }
-  ],
-  "exclusions": ["14:30"]
-}
-
------------------------------------
-"""
+SYSTEM_PROMPT = """(keep your improved prompt here)"""
 
 
-# ✅ TRANSFORMATION FUNCTION
 def convert_to_device_schema(parsed):
 
     def parse_time(t):
@@ -149,7 +41,6 @@ def convert_to_device_schema(parsed):
 
     interval_ms = timer.get("interval_minutes", 30) * 60 * 1000
 
-    # DND
     dnd = {
         "enabled": False,
         "sh": 0,
@@ -181,7 +72,6 @@ def convert_to_device_schema(parsed):
             "em": em_d
         })
 
-    # Exclusions → abs times
     abs_times = []
     for t in exclusions:
         h, m = parse_time(t)
@@ -198,7 +88,6 @@ def convert_to_device_schema(parsed):
             "device": "FROST",
             "ts_written": 0
         },
-
         "dfplayer": {
             "volume": 30,
             "boot_volume": 15,
@@ -207,7 +96,6 @@ def convert_to_device_schema(parsed):
             "night_end_hour": 7,
             "night_mode_enabled": False
         },
-
         "audio": {
             "pomo_focus_music_enabled": True,
             "pomo_focus_music_track": 31,
@@ -215,20 +103,16 @@ def convert_to_device_schema(parsed):
             "meditation_music_enabled": False,
             "meditation_music_track": 35
         },
-
         "tone_mode": "professional",
-
         "ui": {
             "action_log": {
                 "enabled": True,
                 "show_ms": 3000
             }
         },
-
         "custom_texts": {
             "hydration": "Time to drink water!"
         },
-
         "hydration": {
             "enabled": timer.get("enabled", False),
             "interval_ms": interval_ms,
@@ -244,9 +128,7 @@ def convert_to_device_schema(parsed):
             "days": [],
             "abs": abs_config
         },
-
         "dnd": dnd,
-
         "stretch": {"enabled": False},
         "eye": {"enabled": False},
         "clean": {"enabled": True},
@@ -270,11 +152,13 @@ def home():
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
-        start_time = datetime.now()
+        start_time = datetime.now(IST)
 
         logs = []
+
         def log(step):
-            logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {step}")
+            current_time = datetime.now(IST).strftime('%H:%M:%S')
+            logs.append(f"{current_time} - {step}")
 
         log("Request received")
 
@@ -320,7 +204,7 @@ def parse_schedule():
         log("Converted to device schema")
         log("Schema transformation complete")
 
-        processing_time = datetime.now() - start_time
+        processing_time = datetime.now(IST) - start_time
         log(f"Total time: {round(processing_time.total_seconds(), 2)}s")
 
         return jsonify({
