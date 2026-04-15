@@ -152,12 +152,12 @@ def home():
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
-        start_time = datetime.now(IST)
+        start_time = datetime.now(pytz.utc).astimezone(IST)
 
         logs = []
 
         def log(step):
-            current_time = datetime.now(IST).strftime('%H:%M:%S')
+            current_time = datetime.now(pytz.utc).astimezone(IST).strftime('%H:%M:%S')
             logs.append(f"{current_time} - {step}")
 
         log("Request received")
@@ -204,7 +204,7 @@ def parse_schedule():
         log("Converted to device schema")
         log("Schema transformation complete")
 
-        processing_time = datetime.now(IST) - start_time
+        processing_time = datetime.now(pytz.utc).astimezone(IST) - start_time
         log(f"Total time: {round(processing_time.total_seconds(), 2)}s")
 
         return jsonify({
