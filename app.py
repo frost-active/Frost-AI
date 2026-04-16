@@ -17,7 +17,7 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 # =========================
-# SYSTEM PROMPT
+# SYSTEM PROMPT (UPDATED)
 # =========================
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
@@ -26,19 +26,18 @@ Extract ALL scheduling tasks from user input.
 
 Return ONLY valid JSON.
 
-Supported tasks:
+------------------------
+SUPPORTED TASKS
+------------------------
 - hydration
 - eye
 - stretch
 - walk
 
-Output format:
-{
-  "tasks": [],
-  "do_not_disturb": [],
-  "exclusions": []
-}
-ALSO EXTRACT:
+------------------------
+ACTIVE WINDOW
+------------------------
+Extract working hours:
 
 "active_window": {
   "start": "HH:MM",
@@ -46,19 +45,44 @@ ALSO EXTRACT:
 }
 
 Rules:
-- If user mentions working hours → use that
-- Apply this window to all tasks unless overridden
+- If user mentions work hours → use that
+- Apply to all tasks unless overridden
 
-rules:
--timings with labels "lunch", "meetings", "break" are to be considered as do not disturb window
-- if user mentions "do not disturb" or "dnd" or "focus mode" or similar, consider that as do not disturb window
+------------------------
+TASK FORMAT
+------------------------
+{
+  "type": "hydration | eye | stretch | walk",
+  "enabled": true,
+  "interval_minutes": number,
+  "duration_seconds": number (eye only),
+  "start_time": "HH:MM" (optional),
+  "end_time": "HH:MM" (optional)
+}
+
+------------------------
+DND + EXCLUSIONS
+------------------------
+Extract:
+- do_not_disturb
+- exclusions
+
+------------------------
+OUTPUT
+------------------------
+{
+  "active_window": {},
+  "tasks": [],
+  "do_not_disturb": [],
+  "exclusions": []
+}
 """
 
 
 # =========================
-# SAFE HELPERS
+# HELPERS
 # =========================
-def safe_int(val, default=0):
+def safe_int(val, default=None):
     try:
         return int(val)
     except:
@@ -80,6 +104,7 @@ def safe_json_parse(text):
         return json.loads(text)
     except:
         return {
+            "active_window": {},
             "tasks": [],
             "do_not_disturb": [],
             "exclusions": []
@@ -101,13 +126,11 @@ def normalize_tasks(parsed):
         if not isinstance(t, dict):
             continue
 
-        t_type = t.get("type")
-
         normalized.append({
-            "type": t_type,
+            "type": t.get("type"),
             "enabled": bool(t.get("enabled", True)),
-            "interval_minutes": safe_int(t.get("interval_minutes"), None),
-            "duration_seconds": safe_int(t.get("duration_seconds"), None),
+            "interval_minutes": safe_int(t.get("interval_minutes")),
+            "duration_seconds": safe_int(t.get("duration_seconds")),
             "start_time": t.get("start_time"),
             "end_time": t.get("end_time")
         })
@@ -116,14 +139,19 @@ def normalize_tasks(parsed):
 
 
 # =========================
-# DEVICE SCHEMA CONVERSION
+# DEVICE SCHEMA
 # =========================
 def convert_to_device_schema(parsed):
 
     tasks = normalize_tasks(parsed)
 
+    active = parsed.get("active_window") or {}
     dnd_list = parsed.get("do_not_disturb") or []
     exclusions = parsed.get("exclusions") or []
+
+    # GLOBAL WINDOW
+    global_sh, global_sm = parse_time(active.get("start"))
+    global_eh, global_em = parse_time(active.get("end"))
 
     hydration = {}
     eye = {}
@@ -131,29 +159,35 @@ def convert_to_device_schema(parsed):
     walk = {}
 
     # -------------------------
-    # TASK DISTRIBUTION
+    # DISTRIBUTE TASKS
     # -------------------------
     for t in tasks:
         if t["type"] == "hydration":
             hydration = t
-
         elif t["type"] == "eye":
             eye = t
-
         elif t["type"] == "stretch":
             stretch = t
-
         elif t["type"] == "walk":
             walk = t
 
     # -------------------------
-    # HYDRATION (SAFE DEFAULT)
+    # HYDRATION (WITH FALLBACK)
     # -------------------------
     h_enabled = hydration.get("enabled", False)
     h_interval = (hydration.get("interval_minutes") or 30) * 60 * 1000
 
-    sh, sm = parse_time(hydration.get("start_time"))
-    eh, em = parse_time(hydration.get("end_time"))
+    sh, sm = (
+        parse_time(hydration.get("start_time"))
+        if hydration.get("start_time")
+        else (global_sh, global_sm)
+    )
+
+    eh, em = (
+        parse_time(hydration.get("end_time"))
+        if hydration.get("end_time")
+        else (global_eh, global_em)
+    )
 
     # -------------------------
     # EYE
@@ -279,7 +313,7 @@ def convert_to_device_schema(parsed):
 # =========================
 @app.route("/")
 def home():
-    return "Stabilized Scheduler API 🚀"
+    return "Final Stabilized Scheduler API 🚀"
 
 
 @app.route("/parse", methods=["POST"])
