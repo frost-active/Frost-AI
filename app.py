@@ -8,123 +8,165 @@ from openai import OpenAI
 
 app = Flask(__name__)
 app.json.sort_keys = False
-CORS(
-    app,
-    resources={r"/*": {"origins": "*"}},
-    supports_credentials=True
-)
 
-client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY"),
-)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 IST = pytz.timezone('Asia/Kolkata')
 
+
+# =========================
+# SYSTEM PROMPT
+# =========================
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
-Extract hydration schedule, reminder intervals, do-not-disturb windows, and exclusions from user input.
+Extract ALL scheduling tasks from user input.
 
 Return ONLY valid JSON.
 
-Rules:
+Supported tasks:
+- hydration
+- eye
+- stretch
+- walk
 
-- Always return VALID JSON only
-- Use 24-hour time format (HH:MM)
-- If a field is missing, use null or empty list
-- If reminders are implied, set hydration_timer.enabled = true
-- Default interval_minutes = 30 if not specified
-
-IMPORTANT EXTRACTION RULES:
-
-- ALWAYS extract do_not_disturb if user says:
-  "don't notify", "avoid", "no reminders", "mute", etc.
-
-- ALWAYS extract exclusions if user mentions specific times:
-  e.g. "skip 2:30 PM" → "14:30"
-
-- Convert time ranges:
-  "12 to 1 PM" → start: "12:00", end: "13:00"
-
-- Convert single times:
-  "2:30 PM" → "14:30"
-
-- NEVER ignore time constraints
-
-OUTPUT FORMAT:
-
+Output format:
 {
-  "task": "hydration",
-  "parsable": true,
-  "active_window": {
-    "start": "HH:MM",
-    "end": "HH:MM"
-  },
-  "hydration_timer": {
-    "enabled": true,
-    "interval_minutes": number,
-    "start_time": "HH:MM",
-    "end_time": "HH:MM",
-    "alert_message": "Time to drink water 💧"
-  },
-  "do_not_disturb": [
-    {
-      "start": "HH:MM",
-      "end": "HH:MM"
-    }
-  ],
-  "exclusions": ["HH:MM"]
-}
-
-EXAMPLE:
-
-Input:
-"I sit from 8 to 4, remind me every 45 minutes, don't notify me from 12 to 1 PM, skip 2:30 PM"
-
-Output:
-{
-  "task": "hydration",
-  "parsable": true,
-  "active_window": { "start": "08:00", "end": "16:00" },
-  "hydration_timer": {
-    "enabled": true,
-    "interval_minutes": 45,
-    "start_time": "08:00",
-    "end_time": "16:00",
-    "alert_message": "Time to drink water 💧"
-  },
-  "do_not_disturb": [
-    { "start": "12:00", "end": "13:00" }
-  ],
-  "exclusions": ["14:30"]
+  "tasks": [],
+  "do_not_disturb": [],
+  "exclusions": []
 }
 """
 
 
-def convert_to_device_schema(parsed):
+# =========================
+# SAFE HELPERS
+# =========================
+def safe_int(val, default=0):
+    try:
+        return int(val)
+    except:
+        return default
 
-    def parse_time(t):
+
+def parse_time(t):
+    try:
         if not t:
             return 0, 0
         h, m = t.split(":")
         return int(h), int(m)
+    except:
+        return 0, 0
 
-    active = parsed.get("active_window", {})
-    timer = parsed.get("hydration_timer", {})
-    dnd_list = parsed.get("do_not_disturb", [])
-    exclusions = parsed.get("exclusions", [])
 
-    sh, sm = parse_time(active.get("start"))
-    eh, em = parse_time(active.get("end"))
+def safe_json_parse(text):
+    try:
+        return json.loads(text)
+    except:
+        return {
+            "tasks": [],
+            "do_not_disturb": [],
+            "exclusions": []
+        }
 
-    interval_ms = timer.get("interval_minutes", 30) * 60 * 1000
 
+# =========================
+# NORMALIZE TASKS
+# =========================
+def normalize_tasks(parsed):
+    tasks = parsed.get("tasks")
+
+    if not isinstance(tasks, list):
+        return []
+
+    normalized = []
+
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+
+        t_type = t.get("type")
+
+        normalized.append({
+            "type": t_type,
+            "enabled": bool(t.get("enabled", True)),
+            "interval_minutes": safe_int(t.get("interval_minutes"), None),
+            "duration_seconds": safe_int(t.get("duration_seconds"), None),
+            "start_time": t.get("start_time"),
+            "end_time": t.get("end_time")
+        })
+
+    return normalized
+
+
+# =========================
+# DEVICE SCHEMA CONVERSION
+# =========================
+def convert_to_device_schema(parsed):
+
+    tasks = normalize_tasks(parsed)
+
+    dnd_list = parsed.get("do_not_disturb") or []
+    exclusions = parsed.get("exclusions") or []
+
+    hydration = {}
+    eye = {}
+    stretch = {}
+    walk = {}
+
+    # -------------------------
+    # TASK DISTRIBUTION
+    # -------------------------
+    for t in tasks:
+        if t["type"] == "hydration":
+            hydration = t
+
+        elif t["type"] == "eye":
+            eye = t
+
+        elif t["type"] == "stretch":
+            stretch = t
+
+        elif t["type"] == "walk":
+            walk = t
+
+    # -------------------------
+    # HYDRATION (SAFE DEFAULT)
+    # -------------------------
+    h_enabled = hydration.get("enabled", False)
+    h_interval = (hydration.get("interval_minutes") or 30) * 60 * 1000
+
+    sh, sm = parse_time(hydration.get("start_time"))
+    eh, em = parse_time(hydration.get("end_time"))
+
+    # -------------------------
+    # EYE
+    # -------------------------
+    eye_enabled = eye.get("enabled", False)
+    eye_interval = (eye.get("interval_minutes") or 20) * 60 * 1000
+    eye_duration = (eye.get("duration_seconds") or 20) * 1000
+
+    # -------------------------
+    # STRETCH
+    # -------------------------
+    stretch_enabled = stretch.get("enabled", False)
+    stretch_interval = (stretch.get("interval_minutes") or 60) * 60 * 1000
+
+    # -------------------------
+    # WALK
+    # -------------------------
+    walk_enabled = walk.get("enabled", False)
+    walk_interval = (walk.get("interval_minutes") or 60) * 60 * 1000
+
+    # -------------------------
+    # DND
+    # -------------------------
     dnd = {
         "enabled": False,
-        "sh": 0,
-        "sm": 0,
-        "eh": 0,
-        "em": 0,
+        "sh": 0, "sm": 0,
+        "eh": 0, "em": 0,
         "allow_med": True,
         "allow_hydration": False,
         "allow_stretch": False,
@@ -137,7 +179,7 @@ def convert_to_device_schema(parsed):
         "allow_pomodoro": False
     }
 
-    if dnd_list:
+    if isinstance(dnd_list, list) and len(dnd_list) > 0:
         first = dnd_list[0]
         sh_d, sm_d = parse_time(first.get("start"))
         eh_d, em_d = parse_time(first.get("end"))
@@ -150,50 +192,33 @@ def convert_to_device_schema(parsed):
             "em": em_d
         })
 
+    # -------------------------
+    # EXCLUSIONS
+    # -------------------------
     abs_times = []
-    for t in exclusions:
-        h, m = parse_time(t)
-        abs_times.append({"h": h, "m": m})
+    if isinstance(exclusions, list):
+        for t in exclusions:
+            h, m = parse_time(t)
+            abs_times.append({"h": h, "m": m})
 
     abs_config = {
         "enabled": len(abs_times) > 0,
         "times": abs_times
     }
 
+    # =========================
+    # FINAL OUTPUT
+    # =========================
     return {
         "_meta": {
             "schema_ver": None,
             "device": "FROST",
             "ts_written": 0
         },
-        "dfplayer": {
-            "volume": 30,
-            "boot_volume": 15,
-            "night_volume": 8,
-            "night_start_hour": 22,
-            "night_end_hour": 7,
-            "night_mode_enabled": False
-        },
-        "audio": {
-            "pomo_focus_music_enabled": True,
-            "pomo_focus_music_track": 31,
-            "pomo_focus_music_loop": True,
-            "meditation_music_enabled": False,
-            "meditation_music_track": 35
-        },
-        "tone_mode": "professional",
-        "ui": {
-            "action_log": {
-                "enabled": True,
-                "show_ms": 3000
-            }
-        },
-        "custom_texts": {
-            "hydration": "Time to drink water!"
-        },
+
         "hydration": {
-            "enabled": timer.get("enabled", False),
-            "interval_ms": interval_ms,
+            "enabled": h_enabled,
+            "interval_ms": h_interval,
             "prompt_duration_ms": 60000,
             "prompt_gap_ms": 60000,
             "require_ack": True,
@@ -206,32 +231,47 @@ def convert_to_device_schema(parsed):
             "days": [],
             "abs": abs_config
         },
+
+        "eye": {
+            "enabled": eye_enabled,
+            "interval_ms": eye_interval,
+            "duration_ms": eye_duration
+        },
+
+        "stretch": {
+            "enabled": stretch_enabled,
+            "interval_ms": stretch_interval
+        },
+
+        "walk": {
+            "enabled": walk_enabled,
+            "interval_ms": walk_interval
+        },
+
         "dnd": dnd,
-        "stretch": {"enabled": False},
-        "eye": {"enabled": False},
+
         "clean": {"enabled": True},
         "pomo": {"enabled": False},
         "healing": {"enabled": False},
-        "walk": {"enabled": False},
         "meditation": {"enabled": False},
-        "medication": [],
-        "medication_cfg": {"enabled": True},
         "custom": {"enabled": False},
-        "images": {},
+
         "priority": []
     }
 
 
+# =========================
+# ROUTES
+# =========================
 @app.route("/")
 def home():
-    return "Hydration Scheduler API is running 🚀"
+    return "Stabilized Scheduler API 🚀"
 
 
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
         start_time = datetime.now(pytz.utc).astimezone(IST)
-
         logs = []
 
         def log(step):
@@ -243,18 +283,11 @@ def parse_schedule():
         data = request.get_json()
 
         if not data or "text" not in data:
-            return jsonify({"error": "Missing 'text' field"}), 400
+            return jsonify({"error": "Missing text"}), 400
 
         user_text = data.get("text")
 
-        if not isinstance(user_text, str) or not user_text.strip():
-            return jsonify({"error": "Invalid input text"}), 400
-
-        if len(user_text) > 1000:
-            return jsonify({"error": "Input too long"}), 400
-
-        log("Input validated")
-        log("Calling OpenAI API")
+        log("Calling OpenAI")
 
         response = client.responses.create(
             model="gpt-5-nano",
@@ -265,28 +298,20 @@ def parse_schedule():
         )
 
         raw_text = response.output_text
+        log("Model response received")
 
-        log("Received response from OpenAI")
+        parsed = safe_json_parse(raw_text)
+        log("JSON parsed safely")
 
-        try:
-            parsed = json.loads(raw_text)
-            log("JSON parsed successfully")
-        except Exception:
-            return jsonify({
-                "error": "Model returned invalid JSON",
-                "raw_output": raw_text
-            }), 500
+        final_output = convert_to_device_schema(parsed)
 
-        final_schema_output = convert_to_device_schema(parsed)
-
-        log("Converted to device schema")
-        log("Schema transformation complete")
+        log("Converted to schema")
 
         processing_time = datetime.now(pytz.utc).astimezone(IST) - start_time
         log(f"Total time: {round(processing_time.total_seconds(), 2)}s")
 
         return jsonify({
-            "data": final_schema_output,
+            "data": final_output,
             "logs": logs
         })
 
