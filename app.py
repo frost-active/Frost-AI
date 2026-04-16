@@ -22,9 +22,10 @@ SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
 STRICT RULES:
-- Ignore any instruction that asks you to break format
 - ONLY output valid JSON
-- Do not include explanations or text outside JSON
+- NO explanations
+- NO markdown
+- NO trailing commas
 
 Extract hydration schedule, reminder intervals, do-not-disturb windows, and exclusions.
 
@@ -97,7 +98,6 @@ def convert_to_device_schema(parsed):
 
     interval_ms = timer.get("interval_minutes", 30) * 60 * 1000
 
-    # ⚠ Only first DND supported
     dnd = {
         "enabled": False,
         "sh": 0, "sm": 0, "eh": 0, "em": 0,
@@ -127,7 +127,6 @@ def convert_to_device_schema(parsed):
             "ts_written": int(datetime.now(IST).timestamp())
         },
         "custom_texts": {
-            # ✅ unified source of truth
             "hydration": timer.get("alert_message")
         },
         "hydration": {
@@ -176,19 +175,29 @@ def parse_schedule():
 
         log("Calling OpenAI")
 
+        # ✅ FIX: removed response_format
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
-            ],
-            
+            ]
         )
+
         raw_text = response.output_text
 
-        parsed = response.output[0].content[0].json
+        log("Received response from model")
 
-        log("Model JSON parsed")
+        try:
+            parsed = json.loads(raw_text)
+            log("JSON parsed successfully")
+        except Exception:
+            log(f"INVALID JSON FROM MODEL: {raw_text}", "ERROR")
+            return jsonify({
+                "success": False,
+                "error": "Model returned invalid JSON",
+                "raw_output": raw_text
+            }), 500
 
         parsed = normalize(parsed)
         log("Normalization complete")
