@@ -17,7 +17,6 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 IST = ZoneInfo("Asia/Kolkata")
 
-# 🔒 Hardened system prompt
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
@@ -55,21 +54,17 @@ OUTPUT FORMAT:
 """
 
 
-# ✅ Normalization layer
 def normalize(parsed):
     timer = parsed.get("hydration_timer", {}) or {}
     active = parsed.get("active_window", {}) or {}
 
-    # interval safety
     interval = timer.get("interval_minutes") or 30
     timer["interval_minutes"] = int(interval)
 
-    # active window fallback
     if not active.get("start") or not active.get("end"):
         active["start"] = "09:00"
         active["end"] = "18:00"
 
-    # ensure alert message exists
     if not timer.get("alert_message"):
         timer["alert_message"] = "Time to drink water 💧"
 
@@ -175,7 +170,6 @@ def parse_schedule():
 
         log("Calling OpenAI")
 
-        # ✅ FIX: removed response_format
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
@@ -207,9 +201,11 @@ def parse_schedule():
 
         total_time = round((datetime.now(IST) - start_time).total_seconds(), 2)
 
+        # ✅ BACKWARD COMPATIBLE RESPONSE
         return jsonify({
             "success": True,
-            "config": final_output,
+            "data": final_output,     # 👈 OLD frontend support
+            "config": final_output,   # 👈 NEW structure
             "meta": {
                 "processing_time_s": total_time,
                 "request_id": request_id
