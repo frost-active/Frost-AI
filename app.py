@@ -38,6 +38,10 @@ Output format:
   "do_not_disturb": [],
   "exclusions": []
 }
+
+rules:
+-timings with labels "lunch", "meetings", "break" are to be considered as do not disturb window
+- if user mentions "do not disturb" or "dnd" or "focus mode" or similar, consider that as do not disturb window
 """
 
 
