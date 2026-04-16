@@ -17,7 +17,7 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 # =========================
-# SYSTEM PROMPT (UPDATED)
+# SYSTEM PROMPT
 # =========================
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
@@ -26,50 +26,19 @@ Extract ALL scheduling tasks from user input.
 
 Return ONLY valid JSON.
 
-------------------------
-SUPPORTED TASKS
-------------------------
+SUPPORTED TASKS:
 - hydration
 - eye
 - stretch
 - walk
 
-------------------------
-ACTIVE WINDOW
-------------------------
-Extract working hours:
-
+ALSO EXTRACT:
 "active_window": {
   "start": "HH:MM",
   "end": "HH:MM"
 }
 
-Rules:
-- If user mentions work hours → use that
-- Apply to all tasks unless overridden
-
-------------------------
-TASK FORMAT
-------------------------
-{
-  "type": "hydration | eye | stretch | walk",
-  "enabled": true,
-  "interval_minutes": number,
-  "duration_seconds": number (eye only),
-  "start_time": "HH:MM" (optional),
-  "end_time": "HH:MM" (optional)
-}
-
-------------------------
-DND + EXCLUSIONS
-------------------------
-Extract:
-- do_not_disturb
-- exclusions
-
-------------------------
-OUTPUT
-------------------------
+OUTPUT:
 {
   "active_window": {},
   "tasks": [],
@@ -139,6 +108,42 @@ def normalize_tasks(parsed):
 
 
 # =========================
+# 🧠 SCHEDULER ENGINE (NEW)
+# =========================
+def generate_schedule(tasks, global_start, global_end):
+    schedule = []
+
+    start_minutes = global_start[0] * 60 + global_start[1]
+    end_minutes = global_end[0] * 60 + global_end[1]
+
+    for t in tasks:
+        if not t.get("enabled"):
+            continue
+
+        interval = t.get("interval_minutes")
+        if not interval:
+            continue
+
+        current = start_minutes + interval
+
+        while current <= end_minutes:
+            hour = current // 60
+            minute = current % 60
+
+            schedule.append({
+                "time": f"{str(hour).zfill(2)}:{str(minute).zfill(2)}",
+                "task": t.get("type")
+            })
+
+            current += interval
+
+    # Sort final timeline
+    schedule.sort(key=lambda x: x["time"])
+
+    return schedule
+
+
+# =========================
 # DEVICE SCHEMA
 # =========================
 def convert_to_device_schema(parsed):
@@ -158,9 +163,6 @@ def convert_to_device_schema(parsed):
     stretch = {}
     walk = {}
 
-    # -------------------------
-    # DISTRIBUTE TASKS
-    # -------------------------
     for t in tasks:
         if t["type"] == "hydration":
             hydration = t
@@ -171,9 +173,7 @@ def convert_to_device_schema(parsed):
         elif t["type"] == "walk":
             walk = t
 
-    # -------------------------
-    # HYDRATION (WITH FALLBACK)
-    # -------------------------
+    # HYDRATION
     h_enabled = hydration.get("enabled", False)
     h_interval = (hydration.get("interval_minutes") or 30) * 60 * 1000
 
@@ -189,28 +189,20 @@ def convert_to_device_schema(parsed):
         else (global_eh, global_em)
     )
 
-    # -------------------------
     # EYE
-    # -------------------------
     eye_enabled = eye.get("enabled", False)
     eye_interval = (eye.get("interval_minutes") or 20) * 60 * 1000
     eye_duration = (eye.get("duration_seconds") or 20) * 1000
 
-    # -------------------------
     # STRETCH
-    # -------------------------
     stretch_enabled = stretch.get("enabled", False)
     stretch_interval = (stretch.get("interval_minutes") or 60) * 60 * 1000
 
-    # -------------------------
     # WALK
-    # -------------------------
     walk_enabled = walk.get("enabled", False)
     walk_interval = (walk.get("interval_minutes") or 60) * 60 * 1000
 
-    # -------------------------
     # DND
-    # -------------------------
     dnd = {
         "enabled": False,
         "sh": 0, "sm": 0,
@@ -240,9 +232,7 @@ def convert_to_device_schema(parsed):
             "em": em_d
         })
 
-    # -------------------------
     # EXCLUSIONS
-    # -------------------------
     abs_times = []
     if isinstance(exclusions, list):
         for t in exclusions:
@@ -254,9 +244,14 @@ def convert_to_device_schema(parsed):
         "times": abs_times
     }
 
-    # =========================
+    # 🧠 GENERATE SCHEDULE
+    schedule = generate_schedule(
+        tasks,
+        (global_sh, global_sm),
+        (global_eh, global_em)
+    )
+
     # FINAL OUTPUT
-    # =========================
     return {
         "_meta": {
             "schema_ver": None,
@@ -298,6 +293,8 @@ def convert_to_device_schema(parsed):
 
         "dnd": dnd,
 
+        "schedule": schedule,  # ✅ NEW
+
         "clean": {"enabled": True},
         "pomo": {"enabled": False},
         "healing": {"enabled": False},
@@ -313,7 +310,7 @@ def convert_to_device_schema(parsed):
 # =========================
 @app.route("/")
 def home():
-    return "Final Stabilized Scheduler API 🚀"
+    return "Scheduler Engine Active 🚀"
 
 
 @app.route("/parse", methods=["POST"])
