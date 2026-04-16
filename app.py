@@ -38,6 +38,16 @@ Output format:
   "do_not_disturb": [],
   "exclusions": []
 }
+ALSO EXTRACT:
+
+"active_window": {
+  "start": "HH:MM",
+  "end": "HH:MM"
+}
+
+Rules:
+- If user mentions working hours → use that
+- Apply this window to all tasks unless overridden
 
 rules:
 -timings with labels "lunch", "meetings", "break" are to be considered as do not disturb window
