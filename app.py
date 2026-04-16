@@ -182,8 +182,9 @@ def parse_schedule():
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_text}
             ],
-            response_format={"type": "json_object"}  # ✅ FIX
+            
         )
+        raw_text = response.output_text
 
         parsed = response.output[0].content[0].json
 
