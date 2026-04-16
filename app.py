@@ -27,7 +27,17 @@ STRICT RULES:
 - NO trailing commas
 
 Extract hydration schedule, reminder intervals, do-not-disturb windows, and exclusions.
+- ALWAYS extract do_not_disturb if user says:
+  "don't notify", "avoid", "no reminders", "mute", etc.
 
+- ALSO treat natural break periods as do_not_disturb:
+  Examples:
+  - "lunch 12:30 to 1:30"
+  - "break from 3 to 3:15"
+  - "meeting 2 to 3"
+  - "nap time 1 to 2"
+
+  These MUST be converted into do_not_disturb windows
 Rules:
 - Use 24-hour format HH:MM
 - Default interval_minutes = 30
