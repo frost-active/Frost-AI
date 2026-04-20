@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 from datetime import datetime
 import pytz
 from flask_cors import CORS
@@ -13,13 +14,9 @@ app.json.sort_keys = False
 CORS(app)
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
 IST = pytz.timezone('Asia/Kolkata')
 
 
-# =========================
-# SYSTEM PROMPT
-# =========================
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
@@ -40,9 +37,6 @@ OUTPUT:
 """
 
 
-# =========================
-# HELPERS
-# =========================
 def safe_int(val, default=None):
     try:
         return int(val)
@@ -60,9 +54,6 @@ def parse_time(t):
         return 0, 0
 
 
-# =========================
-# SAFE JSON
-# =========================
 def safe_json_parse(text):
     try:
         return json.loads(text)
@@ -90,9 +81,6 @@ def ensure_defaults(parsed):
     return parsed
 
 
-# =========================
-# ACTIVE WINDOW FIX
-# =========================
 def infer_active_window(text, parsed):
     if parsed.get("active_window", {}).get("start"):
         return parsed
@@ -118,9 +106,6 @@ def infer_active_window(text, parsed):
     return parsed
 
 
-# =========================
-# NORMALIZE TASKS
-# =========================
 def normalize_tasks(parsed):
     tasks = parsed.get("tasks", [])
     result = []
@@ -131,7 +116,7 @@ def normalize_tasks(parsed):
 
         result.append({
             "type": t.get("type"),
-            "enabled": bool(t.get("enabled", True)),
+            "enabled": bool(t.get("enabled", True)),  # default TRUE
             "interval_minutes": safe_int(t.get("interval_minutes")),
             "duration_seconds": safe_int(t.get("duration_seconds")),
             "start_time": t.get("start_time"),
@@ -141,9 +126,6 @@ def normalize_tasks(parsed):
     return result
 
 
-# =========================
-# SCHEDULER
-# =========================
 PRIORITY = {"hydration": 1, "eye": 2, "stretch": 3, "walk": 3}
 MIN_GAP = 5
 
@@ -172,13 +154,15 @@ def generate_schedule(tasks, global_start, global_end, dnd):
         if not interval:
             continue
 
+        task_type = t.get("type")
+
         current = start + interval
 
         while current <= end:
             raw.append({
                 "time_min": current,
-                "task": t.get("type"),
-                "priority": PRIORITY.get(t.get("type"), 99)
+                "task": task_type,
+                "priority": PRIORITY.get(task_type, 99)
             })
             current += interval
 
@@ -197,7 +181,11 @@ def generate_schedule(tasks, global_start, global_end, dnd):
         if e["time_min"] - last["time_min"] < MIN_GAP:
             new_time = last["time_min"] + MIN_GAP
             if new_time <= end:
-                final.append({**e, "time_min": new_time})
+                final.append({
+                    "time_min": new_time,
+                    "task": e["task"],
+                    "priority": e["priority"]
+                })
         else:
             final.append(e)
 
@@ -205,6 +193,7 @@ def generate_schedule(tasks, global_start, global_end, dnd):
     for e in final:
         h = e["time_min"] // 60
         m = e["time_min"] % 60
+
         schedule.append({
             "time": f"{h:02d}:{m:02d}",
             "task": e["task"]
@@ -213,22 +202,25 @@ def generate_schedule(tasks, global_start, global_end, dnd):
     return schedule
 
 
-# =========================
-# DEVICE SCHEMA
-# =========================
 def convert(parsed):
-
     tasks = normalize_tasks(parsed)
+
     active = parsed.get("active_window", {})
     dnd_list = parsed.get("do_not_disturb", [])
 
     sh, sm = parse_time(active.get("start"))
     eh, em = parse_time(active.get("end"))
 
-    hydration = next((t for t in tasks if t["type"] == "hydration"), {})
-    eye = next((t for t in tasks if t["type"] == "eye"), {})
-    stretch = next((t for t in tasks if t["type"] == "stretch"), {})
-    walk = next((t for t in tasks if t["type"] == "walk"), {})
+    hydration = next((t for t in tasks if t["type"] == "hydration"), None)
+    eye = next((t for t in tasks if t["type"] == "eye"), None)
+    stretch = next((t for t in tasks if t["type"] == "stretch"), None)
+    walk = next((t for t in tasks if t["type"] == "walk"), None)
+
+    # ✅ FIXED ENABLE LOGIC
+    hydration_enabled = hydration.get("enabled", True) if hydration else False
+    eye_enabled = eye.get("enabled", True) if eye else False
+    stretch_enabled = stretch.get("enabled", True) if stretch else False
+    walk_enabled = walk.get("enabled", True) if walk else False
 
     dnd = {"enabled": False, "sh": 0, "sm": 0, "eh": 0, "em": 0}
     if dnd_list:
@@ -238,42 +230,40 @@ def convert(parsed):
 
     return {
         "hydration": {
-            "enabled": hydration.get("enabled", False),
-            "interval_ms": (hydration.get("interval_minutes") or 30)*60000,
+            "enabled": hydration_enabled,
+            "interval_ms": (hydration.get("interval_minutes") if hydration else 30) * 60000,
             "start_hour": sh,
             "start_min": sm,
             "end_hour": eh,
             "end_min": em
         },
         "eye": {
-            "enabled": eye.get("enabled", False),
-            "interval_ms": (eye.get("interval_minutes") or 20)*60000,
-            "duration_ms": (eye.get("duration_seconds") or 20)*1000
+            "enabled": eye_enabled,
+            "interval_ms": (eye.get("interval_minutes") if eye else 20) * 60000,
+            "duration_ms": (eye.get("duration_seconds") if eye else 20) * 1000
         },
         "stretch": {
-            "enabled": stretch.get("enabled", False),
-            "interval_ms": (stretch.get("interval_minutes") or 60)*60000
+            "enabled": stretch_enabled,
+            "interval_ms": (stretch.get("interval_minutes") if stretch else 60) * 60000
         },
         "walk": {
-            "enabled": walk.get("enabled", False),
-            "interval_ms": (walk.get("interval_minutes") or 60)*60000
+            "enabled": walk_enabled,
+            "interval_ms": (walk.get("interval_minutes") if walk else 60) * 60000
         },
         "dnd": dnd,
         "schedule": generate_schedule(tasks, (sh, sm), (eh, em), dnd)
     }
 
 
-# =========================
-# ROUTE
-# =========================
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
+    start_time = time.time()
+    logs = []
+
+    def log(msg):
+        logs.append(f"{datetime.now(IST).strftime('%H:%M:%S')} - {msg}")
+
     try:
-        logs = []
-
-        def log(msg):
-            logs.append(f"{datetime.now(IST).strftime('%H:%M:%S')} - {msg}")
-
         data = request.get_json()
         user_text = data.get("text")
 
@@ -301,6 +291,9 @@ def parse_schedule():
 
         final = convert(parsed)
         log("Converted to schema")
+
+        elapsed = round(time.time() - start_time, 2)
+        log(f"Total elapsed: {elapsed}s")
 
         return jsonify({"data": final, "logs": logs})
 
