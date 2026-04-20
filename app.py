@@ -18,19 +18,125 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 SYSTEM_PROMPT = """
-You are a scheduling assistant.
+You are an intelligent scheduling parser.
 
-Extract ALL scheduling tasks from user input.
+Your job is to convert natural language into STRICT structured JSON.
 
-STRICT RULES:
-- ALWAYS return valid JSON
-- DO NOT include explanations
-- DO NOT include text outside JSON
+-----------------------------------
+CORE REQUIREMENTS
+-----------------------------------
 
-OUTPUT:
+You MUST extract:
+
+1. Active working window
+2. Tasks (hydration, eye, stretch, walk)
+3. Do not disturb periods
+4. Exclusions (if any)
+
+-----------------------------------
+SUPPORTED TASK TYPES
+-----------------------------------
+
+You MUST ONLY use these exact types:
+
+- "hydration"
+- "eye"
+- "stretch"
+- "walk"
+
+NEVER invent new types.
+NEVER leave type empty.
+
+-----------------------------------
+TASK RULES
+-----------------------------------
+
+Each task MUST follow this format:
+
 {
-  "active_window": {},
-  "tasks": [],
+  "type": "hydration | eye | stretch | walk",
+  "enabled": true,
+  "interval_minutes": number,
+  "duration_seconds": number (ONLY for eye),
+  "start_time": null,
+  "end_time": null
+}
+
+Rules:
+- If a task is mentioned → enabled MUST be true
+- If not mentioned → DO NOT include it
+- hydration/stretch/walk → only interval_minutes
+- eye → must include BOTH interval_minutes AND duration_seconds (default 20 sec if not specified)
+
+-----------------------------------
+ACTIVE WINDOW RULES
+-----------------------------------
+
+Extract working hours like:
+
+"9 to 5" → 
+{
+  "start": "09:00",
+  "end": "17:00"
+}
+
+If not provided → leave empty {}
+
+-----------------------------------
+DO NOT DISTURB RULES
+-----------------------------------
+
+Example:
+"avoid 1 to 2" →
+
+[
+  {
+    "start": "13:00",
+    "end": "14:00"
+  }
+]
+
+-----------------------------------
+STRICT OUTPUT FORMAT
+-----------------------------------
+
+You MUST return ONLY valid JSON.
+
+NO explanations  
+NO text outside JSON  
+NO comments  
+
+-----------------------------------
+EXAMPLE
+-----------------------------------
+
+Input:
+"I work 9 to 5, drink water every 30 min, eye breaks every 20 min"
+
+Output:
+{
+  "active_window": {
+    "start": "09:00",
+    "end": "17:00"
+  },
+  "tasks": [
+    {
+      "type": "hydration",
+      "enabled": true,
+      "interval_minutes": 30,
+      "duration_seconds": null,
+      "start_time": null,
+      "end_time": null
+    },
+    {
+      "type": "eye",
+      "enabled": true,
+      "interval_minutes": 20,
+      "duration_seconds": 20,
+      "start_time": null,
+      "end_time": null
+    }
+  ],
   "do_not_disturb": [],
   "exclusions": []
 }
@@ -114,9 +220,15 @@ def normalize_tasks(parsed):
         if not isinstance(t, dict):
             continue
 
+        task_type = t.get("type")
+
+        # 🔥 FIX: skip invalid tasks
+        if not task_type:
+            continue
+
         result.append({
-            "type": t.get("type"),
-            "enabled": bool(t.get("enabled", True)),  # default TRUE
+            "type": task_type,
+            "enabled": bool(t.get("enabled", True)),
             "interval_minutes": safe_int(t.get("interval_minutes")),
             "duration_seconds": safe_int(t.get("duration_seconds")),
             "start_time": t.get("start_time"),
@@ -155,6 +267,10 @@ def generate_schedule(tasks, global_start, global_end, dnd):
             continue
 
         task_type = t.get("type")
+
+        # 🔥 EXTRA SAFETY
+        if not task_type:
+            continue
 
         current = start + interval
 
@@ -216,7 +332,6 @@ def convert(parsed):
     stretch = next((t for t in tasks if t["type"] == "stretch"), None)
     walk = next((t for t in tasks if t["type"] == "walk"), None)
 
-    # ✅ FIXED ENABLE LOGIC
     hydration_enabled = hydration.get("enabled", True) if hydration else False
     eye_enabled = eye.get("enabled", True) if eye else False
     stretch_enabled = stretch.get("enabled", True) if stretch else False
