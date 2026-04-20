@@ -74,7 +74,7 @@ def parse_time(t):
 
 
 # =========================
-# 🧠 RESILIENT JSON PARSER
+# RESILIENT JSON PARSER
 # =========================
 def safe_json_parse(text):
     try:
@@ -112,6 +112,38 @@ def ensure_defaults(parsed):
 
 
 # =========================
+# 🧠 ACTIVE WINDOW FALLBACK
+# =========================
+def infer_active_window(text, parsed):
+    if parsed.get("active_window", {}).get("start"):
+        return parsed
+
+    text = text.lower()
+
+    match = re.search(
+        r"(\d{1,2})\s*(am|pm)?\s*(to|-)\s*(\d{1,2})\s*(am|pm)?",
+        text
+    )
+
+    if match:
+        sh = int(match.group(1))
+        eh = int(match.group(4))
+
+        # Handle AM/PM
+        if match.group(2) == "pm" and sh != 12:
+            sh += 12
+        if match.group(5) == "pm" and eh != 12:
+            eh += 12
+
+        parsed["active_window"] = {
+            "start": f"{sh:02d}:00",
+            "end": f"{eh:02d}:00"
+        }
+
+    return parsed
+
+
+# =========================
 # NORMALIZE TASKS
 # =========================
 def normalize_tasks(parsed):
@@ -136,7 +168,7 @@ def normalize_tasks(parsed):
 
 
 # =========================
-# SCHEDULER (UNCHANGED)
+# SCHEDULER
 # =========================
 PRIORITY = {
     "hydration": 1,
@@ -224,7 +256,7 @@ def generate_schedule(tasks, global_start, global_end, dnd):
 
 
 # =========================
-# DEVICE SCHEMA (UNCHANGED)
+# DEVICE SCHEMA
 # =========================
 def convert_to_device_schema(parsed):
 
@@ -232,7 +264,6 @@ def convert_to_device_schema(parsed):
 
     active = parsed.get("active_window") or {}
     dnd_list = parsed.get("do_not_disturb") or []
-    exclusions = parsed.get("exclusions") or []
 
     global_sh, global_sm = parse_time(active.get("start"))
     global_eh, global_em = parse_time(active.get("end"))
@@ -252,32 +283,23 @@ def convert_to_device_schema(parsed):
         elif t["type"] == "walk":
             walk = t
 
-    # HYDRATION
     h_enabled = hydration.get("enabled", False)
     h_interval = (hydration.get("interval_minutes") or 30) * 60 * 1000
 
     sh, sm = parse_time(hydration.get("start_time")) if hydration.get("start_time") else (global_sh, global_sm)
     eh, em = parse_time(hydration.get("end_time")) if hydration.get("end_time") else (global_eh, global_em)
 
-    # EYE
     eye_enabled = eye.get("enabled", False)
     eye_interval = (eye.get("interval_minutes") or 20) * 60 * 1000
     eye_duration = (eye.get("duration_seconds") or 20) * 1000
 
-    # STRETCH
     stretch_enabled = stretch.get("enabled", False)
     stretch_interval = (stretch.get("interval_minutes") or 60) * 60 * 1000
 
-    # WALK
     walk_enabled = walk.get("enabled", False)
     walk_interval = (walk.get("interval_minutes") or 60) * 60 * 1000
 
-    # DND
-    dnd = {
-        "enabled": False,
-        "sh": 0, "sm": 0,
-        "eh": 0, "em": 0
-    }
+    dnd = {"enabled": False, "sh": 0, "sm": 0, "eh": 0, "em": 0}
 
     if isinstance(dnd_list, list) and len(dnd_list) > 0:
         first = dnd_list[0]
@@ -354,8 +376,9 @@ def parse_schedule():
 
         parsed = safe_json_parse(raw_text)
         parsed = ensure_defaults(parsed)
+        parsed = infer_active_window(user_text, parsed)
 
-        log("Parsed safely")
+        log("Parsed safely + inferred window")
 
         final_output = convert_to_device_schema(parsed)
 
