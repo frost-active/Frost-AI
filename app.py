@@ -18,37 +18,23 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 # =========================
-# SYSTEM PROMPT (STRICT)
+# SYSTEM PROMPT
 # =========================
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
 
-Extract ALL scheduling tasks from user input.
+Extract ONLY what the user is MODIFYING.
 
-STRICT RULES:
-- ALWAYS return valid JSON
-- DO NOT include explanations
-- DO NOT include text outside JSON
-- If unsure, return best-effort JSON
-
-SUPPORTED TASKS:
-- hydration
-- eye
-- stretch
-- walk
-
-ALSO EXTRACT:
-"active_window": {
-  "start": "HH:MM",
-  "end": "HH:MM"
-}
+Rules:
+- Return partial JSON (only what user mentions)
+- Do NOT reset existing values
+- Always return valid JSON
 
 OUTPUT:
 {
   "active_window": {},
   "tasks": [],
-  "do_not_disturb": [],
-  "exclusions": []
+  "do_not_disturb": []
 }
 """
 
@@ -74,13 +60,12 @@ def parse_time(t):
 
 
 # =========================
-# 🧠 RESILIENT JSON PARSER
+# RESILIENT JSON
 # =========================
 def safe_json_parse(text):
     try:
         return json.loads(text)
     except:
-        # Try extracting JSON block
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             try:
@@ -88,38 +73,15 @@ def safe_json_parse(text):
             except:
                 pass
 
-    return {
-        "active_window": {},
-        "tasks": [],
-        "do_not_disturb": [],
-        "exclusions": []
-    }
-
-
-# =========================
-# DEFAULT INJECTION
-# =========================
-def ensure_defaults(parsed):
-    if "tasks" not in parsed or not isinstance(parsed["tasks"], list):
-        parsed["tasks"] = []
-
-    if "active_window" not in parsed:
-        parsed["active_window"] = {}
-
-    if "do_not_disturb" not in parsed:
-        parsed["do_not_disturb"] = []
-
-    if "exclusions" not in parsed:
-        parsed["exclusions"] = []
-
-    return parsed
+    return {}
 
 
 # =========================
 # NORMALIZE TASKS
 # =========================
-def normalize_tasks(parsed):
-    tasks = parsed.get("tasks", [])
+def normalize_tasks(tasks):
+    if not isinstance(tasks, list):
+        return []
 
     normalized = []
 
@@ -140,7 +102,39 @@ def normalize_tasks(parsed):
 
 
 # =========================
-# SCHEDULER (ADAPTIVE)
+# 🧠 MERGE LOGIC (CORE)
+# =========================
+def merge_configs(old, new):
+
+    if not old:
+        return new
+
+    merged = old.copy()
+
+    # Merge tasks
+    old_tasks = normalize_tasks(old.get("tasks", []))
+    new_tasks = normalize_tasks(new.get("tasks", []))
+
+    task_map = {t["type"]: t for t in old_tasks}
+
+    for t in new_tasks:
+        task_map[t["type"]] = t  # overwrite or add
+
+    merged["tasks"] = list(task_map.values())
+
+    # Merge active window
+    if new.get("active_window"):
+        merged["active_window"] = new["active_window"]
+
+    # Merge DND
+    if new.get("do_not_disturb"):
+        merged["do_not_disturb"] = new["do_not_disturb"]
+
+    return merged
+
+
+# =========================
+# SCHEDULER (same as before)
 # =========================
 PRIORITY = {
     "hydration": 1,
@@ -186,11 +180,7 @@ def generate_schedule(tasks, global_start, global_end, dnd):
             })
             current += interval
 
-    filtered = [
-        e for e in raw_events
-        if not is_in_dnd(e["time_min"], dnd)
-    ]
-
+    filtered = [e for e in raw_events if not is_in_dnd(e["time_min"], dnd)]
     filtered.sort(key=lambda x: (x["time_min"], x["priority"]))
 
     final = []
@@ -204,13 +194,8 @@ def generate_schedule(tasks, global_start, global_end, dnd):
 
         if event["time_min"] - last["time_min"] < MIN_GAP:
             new_time = last["time_min"] + MIN_GAP
-
             if new_time <= end_minutes:
-                final.append({
-                    "time_min": new_time,
-                    "task": event["task"],
-                    "priority": event["priority"]
-                })
+                final.append({**event, "time_min": new_time})
         else:
             final.append(event)
 
@@ -218,7 +203,6 @@ def generate_schedule(tasks, global_start, global_end, dnd):
     for e in final:
         hour = e["time_min"] // 60
         minute = e["time_min"] % 60
-
         schedule.append({
             "time": f"{str(hour).zfill(2)}:{str(minute).zfill(2)}",
             "task": e["task"]
@@ -230,12 +214,10 @@ def generate_schedule(tasks, global_start, global_end, dnd):
 # =========================
 # DEVICE SCHEMA
 # =========================
-def convert_to_device_schema(parsed):
+def convert(parsed):
 
-    tasks = normalize_tasks(parsed)
-
-    active = parsed.get("active_window") or {}
-    dnd_list = parsed.get("do_not_disturb") or []
+    tasks = normalize_tasks(parsed.get("tasks", []))
+    active = parsed.get("active_window", {})
 
     global_sh, global_sm = parse_time(active.get("start"))
     global_eh, global_em = parse_time(active.get("end"))
@@ -255,94 +237,37 @@ def convert_to_device_schema(parsed):
         elif t["type"] == "walk":
             walk = t
 
-    # Hydration
-    h_enabled = hydration.get("enabled", False)
-    h_interval = (hydration.get("interval_minutes") or 30) * 60 * 1000
+    dnd = {"enabled": False, "sh": 0, "sm": 0, "eh": 0, "em": 0}
 
-    sh, sm = parse_time(hydration.get("start_time")) if hydration.get("start_time") else (global_sh, global_sm)
-    eh, em = parse_time(hydration.get("end_time")) if hydration.get("end_time") else (global_eh, global_em)
+    if parsed.get("do_not_disturb"):
+        first = parsed["do_not_disturb"][0]
+        sh, sm = parse_time(first.get("start"))
+        eh, em = parse_time(first.get("end"))
 
-    # Eye
-    eye_enabled = eye.get("enabled", False)
-    eye_interval = (eye.get("interval_minutes") or 20) * 60 * 1000
-    eye_duration = (eye.get("duration_seconds") or 20) * 1000
-
-    # Stretch
-    stretch_enabled = stretch.get("enabled", False)
-    stretch_interval = (stretch.get("interval_minutes") or 60) * 60 * 1000
-
-    # Walk
-    walk_enabled = walk.get("enabled", False)
-    walk_interval = (walk.get("interval_minutes") or 60) * 60 * 1000
-
-    # DND
-    dnd = {
-        "enabled": False,
-        "sh": 0, "sm": 0,
-        "eh": 0, "em": 0
-    }
-
-    if isinstance(dnd_list, list) and len(dnd_list) > 0:
-        first = dnd_list[0]
-        sh_d, sm_d = parse_time(first.get("start"))
-        eh_d, em_d = parse_time(first.get("end"))
-
-        dnd.update({
-            "enabled": True,
-            "sh": sh_d,
-            "sm": sm_d,
-            "eh": eh_d,
-            "em": em_d
-        })
+        dnd.update({"enabled": True, "sh": sh, "sm": sm, "eh": eh, "em": em})
 
     schedule = generate_schedule(tasks, (global_sh, global_sm), (global_eh, global_em), dnd)
 
     return {
-        "hydration": {
-            "enabled": h_enabled,
-            "interval_ms": h_interval,
-            "start_hour": sh,
-            "start_min": sm,
-            "end_hour": eh,
-            "end_min": em
-        },
-        "eye": {
-            "enabled": eye_enabled,
-            "interval_ms": eye_interval,
-            "duration_ms": eye_duration
-        },
-        "stretch": {
-            "enabled": stretch_enabled,
-            "interval_ms": stretch_interval
-        },
-        "walk": {
-            "enabled": walk_enabled,
-            "interval_ms": walk_interval
-        },
+        "hydration": hydration,
+        "eye": eye,
+        "stretch": stretch,
+        "walk": walk,
         "dnd": dnd,
         "schedule": schedule
     }
 
 
 # =========================
-# ROUTES
+# ROUTE
 # =========================
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
-        logs = []
-
-        def log(step):
-            logs.append(step)
-
         data = request.get_json()
 
-        if not data or "text" not in data:
-            return jsonify({"error": "Missing text"}), 400
-
         user_text = data.get("text")
-
-        log("Calling OpenAI")
+        previous = data.get("previous", {})
 
         response = client.responses.create(
             model="gpt-5-nano",
@@ -353,18 +278,16 @@ def parse_schedule():
         )
 
         raw_text = response.output_text
-        log("Model responded")
 
-        parsed = safe_json_parse(raw_text)
-        parsed = ensure_defaults(parsed)
+        new_parsed = safe_json_parse(raw_text)
 
-        log("Parsed safely")
+        merged = merge_configs(previous, new_parsed)
 
-        final_output = convert_to_device_schema(parsed)
+        final_output = convert(merged)
 
         return jsonify({
             "data": final_output,
-            "logs": logs
+            "memory": merged
         })
 
     except Exception as e:
@@ -372,4 +295,4 @@ def parse_schedule():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(port=5000)
