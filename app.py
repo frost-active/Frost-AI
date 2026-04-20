@@ -1,7 +1,5 @@
 import os
 import json
-import re
-import time
 from datetime import datetime
 import pytz
 from flask_cors import CORS
@@ -11,138 +9,48 @@ from openai import OpenAI
 app = Flask(__name__)
 app.json.sort_keys = False
 
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
 IST = pytz.timezone('Asia/Kolkata')
 
 
+# =========================
+# SYSTEM PROMPT
+# =========================
 SYSTEM_PROMPT = """
-You are an intelligent scheduling parser.
+You are a scheduling assistant.
 
-Your job is to convert natural language into STRICT structured JSON.
+Extract ALL scheduling tasks from user input.
 
------------------------------------
-CORE REQUIREMENTS
------------------------------------
+Return ONLY valid JSON.
 
-You MUST extract:
+SUPPORTED TASKS:
+- hydration
+- eye
+- stretch
+- walk
 
-1. Active working window
-2. Tasks (hydration, eye, stretch, walk)
-3. Do not disturb periods
-4. Exclusions (if any)
-
------------------------------------
-SUPPORTED TASK TYPES
------------------------------------
-
-You MUST ONLY use these exact types:
-
-- "hydration"
-- "eye"
-- "stretch"
-- "walk"
-
-NEVER invent new types.
-NEVER leave type empty.
-
------------------------------------
-TASK RULES
------------------------------------
-
-Each task MUST follow this format:
-
-{
-  "type": "hydration | eye | stretch | walk",
-  "enabled": true,
-  "interval_minutes": number,
-  "duration_seconds": number (ONLY for eye),
-  "start_time": null,
-  "end_time": null
+ALSO EXTRACT:
+"active_window": {
+  "start": "HH:MM",
+  "end": "HH:MM"
 }
 
-Rules:
-- If a task is mentioned → enabled MUST be true
-- If not mentioned → DO NOT include it
-- hydration/stretch/walk → only interval_minutes
-- eye → must include BOTH interval_minutes AND duration_seconds (default 20 sec if not specified)
-
------------------------------------
-ACTIVE WINDOW RULES
------------------------------------
-
-Extract working hours like:
-
-"9 to 5" → 
+OUTPUT:
 {
-  "start": "09:00",
-  "end": "17:00"
-}
-
-If not provided → leave empty {}
-
------------------------------------
-DO NOT DISTURB RULES
------------------------------------
-
-Example:
-"avoid 1 to 2" →
-
-[
-  {
-    "start": "13:00",
-    "end": "14:00"
-  }
-]
-
------------------------------------
-STRICT OUTPUT FORMAT
------------------------------------
-
-You MUST return ONLY valid JSON.
-
-NO explanations  
-NO text outside JSON  
-NO comments  
-
------------------------------------
-EXAMPLE
------------------------------------
-
-Input:
-"I work 9 to 5, drink water every 30 min, eye breaks every 20 min"
-
-Output:
-{
-  "active_window": {
-    "start": "09:00",
-    "end": "17:00"
-  },
-  "tasks": [
-    {
-      "type": "hydration",
-      "enabled": true,
-      "interval_minutes": 30,
-      "duration_seconds": null,
-      "start_time": null,
-      "end_time": null
-    },
-    {
-      "type": "eye",
-      "enabled": true,
-      "interval_minutes": 20,
-      "duration_seconds": 20,
-      "start_time": null,
-      "end_time": null
-    }
-  ],
+  "active_window": {},
+  "tasks": [],
   "do_not_disturb": [],
   "exclusions": []
 }
 """
 
 
+# =========================
+# HELPERS
+# =========================
 def safe_int(val, default=None):
     try:
         return int(val)
@@ -164,70 +72,31 @@ def safe_json_parse(text):
     try:
         return json.loads(text)
     except:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except:
-                pass
-
-    return {
-        "active_window": {},
-        "tasks": [],
-        "do_not_disturb": [],
-        "exclusions": []
-    }
-
-
-def ensure_defaults(parsed):
-    parsed.setdefault("tasks", [])
-    parsed.setdefault("active_window", {})
-    parsed.setdefault("do_not_disturb", [])
-    parsed.setdefault("exclusions", [])
-    return parsed
-
-
-def infer_active_window(text, parsed):
-    if parsed.get("active_window", {}).get("start"):
-        return parsed
-
-    text = text.lower()
-
-    match = re.search(r"(\d{1,2})\s*(am|pm)?\s*(to|-)\s*(\d{1,2})\s*(am|pm)?", text)
-
-    if match:
-        sh = int(match.group(1))
-        eh = int(match.group(4))
-
-        if match.group(2) == "pm" and sh != 12:
-            sh += 12
-        if match.group(5) == "pm" and eh != 12:
-            eh += 12
-
-        parsed["active_window"] = {
-            "start": f"{sh:02d}:00",
-            "end": f"{eh:02d}:00"
+        return {
+            "active_window": {},
+            "tasks": [],
+            "do_not_disturb": [],
+            "exclusions": []
         }
 
-    return parsed
 
-
+# =========================
+# NORMALIZE TASKS
+# =========================
 def normalize_tasks(parsed):
-    tasks = parsed.get("tasks", [])
-    result = []
+    tasks = parsed.get("tasks")
+
+    if not isinstance(tasks, list):
+        return []
+
+    normalized = []
 
     for t in tasks:
         if not isinstance(t, dict):
             continue
 
-        task_type = t.get("type")
-
-        # 🔥 FIX: skip invalid tasks
-        if not task_type:
-            continue
-
-        result.append({
-            "type": task_type,
+        normalized.append({
+            "type": t.get("type"),
             "enabled": bool(t.get("enabled", True)),
             "interval_minutes": safe_int(t.get("interval_minutes")),
             "duration_seconds": safe_int(t.get("duration_seconds")),
@@ -235,11 +104,20 @@ def normalize_tasks(parsed):
             "end_time": t.get("end_time")
         })
 
-    return result
+    return normalized
 
 
-PRIORITY = {"hydration": 1, "eye": 2, "stretch": 3, "walk": 3}
-MIN_GAP = 5
+# =========================
+# 🧠 SMART + ADAPTIVE ENGINE
+# =========================
+PRIORITY = {
+    "hydration": 1,
+    "eye": 2,
+    "stretch": 3,
+    "walk": 3
+}
+
+MIN_GAP = 5  # minutes
 
 
 def is_in_dnd(time_min, dnd):
@@ -253,11 +131,12 @@ def is_in_dnd(time_min, dnd):
 
 
 def generate_schedule(tasks, global_start, global_end, dnd):
-    raw = []
+    raw_events = []
 
-    start = global_start[0]*60 + global_start[1]
-    end = global_end[0]*60 + global_end[1]
+    start_minutes = global_start[0] * 60 + global_start[1]
+    end_minutes = global_end[0] * 60 + global_end[1]
 
+    # Step 1: Generate raw events
     for t in tasks:
         if not t.get("enabled"):
             continue
@@ -266,123 +145,229 @@ def generate_schedule(tasks, global_start, global_end, dnd):
         if not interval:
             continue
 
-        task_type = t.get("type")
+        current = start_minutes + interval
 
-        # 🔥 EXTRA SAFETY
-        if not task_type:
-            continue
-
-        current = start + interval
-
-        while current <= end:
-            raw.append({
+        while current <= end_minutes:
+            raw_events.append({
                 "time_min": current,
-                "task": task_type,
-                "priority": PRIORITY.get(task_type, 99)
+                "task": t.get("type"),
+                "priority": PRIORITY.get(t.get("type"), 99)
             })
             current += interval
 
-    filtered = [e for e in raw if not is_in_dnd(e["time_min"], dnd)]
+    # Step 2: Remove DND events
+    filtered = [
+        e for e in raw_events
+        if not is_in_dnd(e["time_min"], dnd)
+    ]
+
+    # Step 3: Sort by time then priority
     filtered.sort(key=lambda x: (x["time_min"], x["priority"]))
 
     final = []
 
-    for e in filtered:
+    for event in filtered:
         if not final:
-            final.append(e)
+            final.append(event)
             continue
 
         last = final[-1]
 
-        if e["time_min"] - last["time_min"] < MIN_GAP:
+        # Enforce minimum gap
+        if event["time_min"] - last["time_min"] < MIN_GAP:
             new_time = last["time_min"] + MIN_GAP
-            if new_time <= end:
+
+            if new_time <= end_minutes:
                 final.append({
                     "time_min": new_time,
-                    "task": e["task"],
-                    "priority": e["priority"]
+                    "task": event["task"],
+                    "priority": event["priority"]
                 })
         else:
-            final.append(e)
+            final.append(event)
 
+    # Step 4: Format output
     schedule = []
     for e in final:
-        h = e["time_min"] // 60
-        m = e["time_min"] % 60
+        hour = e["time_min"] // 60
+        minute = e["time_min"] % 60
 
         schedule.append({
-            "time": f"{h:02d}:{m:02d}",
+            "time": f"{str(hour).zfill(2)}:{str(minute).zfill(2)}",
             "task": e["task"]
         })
 
     return schedule
 
 
-def convert(parsed):
+# =========================
+# DEVICE SCHEMA
+# =========================
+def convert_to_device_schema(parsed):
+
     tasks = normalize_tasks(parsed)
 
-    active = parsed.get("active_window", {})
-    dnd_list = parsed.get("do_not_disturb", [])
+    active = parsed.get("active_window") or {}
+    dnd_list = parsed.get("do_not_disturb") or []
+    exclusions = parsed.get("exclusions") or []
 
-    sh, sm = parse_time(active.get("start"))
-    eh, em = parse_time(active.get("end"))
+    global_sh, global_sm = parse_time(active.get("start"))
+    global_eh, global_em = parse_time(active.get("end"))
 
-    hydration = next((t for t in tasks if t["type"] == "hydration"), None)
-    eye = next((t for t in tasks if t["type"] == "eye"), None)
-    stretch = next((t for t in tasks if t["type"] == "stretch"), None)
-    walk = next((t for t in tasks if t["type"] == "walk"), None)
+    hydration = {}
+    eye = {}
+    stretch = {}
+    walk = {}
 
-    hydration_enabled = hydration.get("enabled", True) if hydration else False
-    eye_enabled = eye.get("enabled", True) if eye else False
-    stretch_enabled = stretch.get("enabled", True) if stretch else False
-    walk_enabled = walk.get("enabled", True) if walk else False
+    for t in tasks:
+        if t["type"] == "hydration":
+            hydration = t
+        elif t["type"] == "eye":
+            eye = t
+        elif t["type"] == "stretch":
+            stretch = t
+        elif t["type"] == "walk":
+            walk = t
 
-    dnd = {"enabled": False, "sh": 0, "sm": 0, "eh": 0, "em": 0}
-    if dnd_list:
-        sh_d, sm_d = parse_time(dnd_list[0].get("start"))
-        eh_d, em_d = parse_time(dnd_list[0].get("end"))
-        dnd.update({"enabled": True, "sh": sh_d, "sm": sm_d, "eh": eh_d, "em": em_d})
+    # HYDRATION
+    h_enabled = hydration.get("enabled", False)
+    h_interval = (hydration.get("interval_minutes") or 30) * 60 * 1000
+
+    sh, sm = parse_time(hydration.get("start_time")) if hydration.get("start_time") else (global_sh, global_sm)
+    eh, em = parse_time(hydration.get("end_time")) if hydration.get("end_time") else (global_eh, global_em)
+
+    # EYE
+    eye_enabled = eye.get("enabled", False)
+    eye_interval = (eye.get("interval_minutes") or 20) * 60 * 1000
+    eye_duration = (eye.get("duration_seconds") or 20) * 1000
+
+    # STRETCH
+    stretch_enabled = stretch.get("enabled", False)
+    stretch_interval = (stretch.get("interval_minutes") or 60) * 60 * 1000
+
+    # WALK
+    walk_enabled = walk.get("enabled", False)
+    walk_interval = (walk.get("interval_minutes") or 60) * 60 * 1000
+
+    # DND
+    dnd = {
+        "enabled": False,
+        "sh": 0, "sm": 0,
+        "eh": 0, "em": 0,
+        "allow_med": True,
+        "allow_hydration": False,
+        "allow_stretch": False,
+        "allow_eye": False,
+        "allow_cleaning": False,
+        "allow_walk": False,
+        "allow_meditation": False,
+        "allow_healing": False,
+        "allow_custom": False,
+        "allow_pomodoro": False
+    }
+
+    if isinstance(dnd_list, list) and len(dnd_list) > 0:
+        first = dnd_list[0]
+        sh_d, sm_d = parse_time(first.get("start"))
+        eh_d, em_d = parse_time(first.get("end"))
+
+        dnd.update({
+            "enabled": True,
+            "sh": sh_d,
+            "sm": sm_d,
+            "eh": eh_d,
+            "em": em_d
+        })
+
+    # EXCLUSIONS
+    abs_times = []
+    if isinstance(exclusions, list):
+        for t in exclusions:
+            h, m = parse_time(t)
+            abs_times.append({"h": h, "m": m})
+
+    abs_config = {
+        "enabled": len(abs_times) > 0,
+        "times": abs_times
+    }
+
+    # FINAL SCHEDULE
+    schedule = generate_schedule(tasks, (global_sh, global_sm), (global_eh, global_em), dnd)
 
     return {
+        "_meta": {"schema_ver": None, "device": "FROST", "ts_written": 0},
+
         "hydration": {
-            "enabled": hydration_enabled,
-            "interval_ms": (hydration.get("interval_minutes") if hydration else 30) * 60000,
+            "enabled": h_enabled,
+            "interval_ms": h_interval,
+            "prompt_duration_ms": 60000,
+            "prompt_gap_ms": 60000,
+            "require_ack": True,
+            "goal_ml": 2000,
             "start_hour": sh,
             "start_min": sm,
             "end_hour": eh,
-            "end_min": em
+            "end_min": em,
+            "mode": "interval",
+            "days": [],
+            "abs": abs_config
         },
+
         "eye": {
             "enabled": eye_enabled,
-            "interval_ms": (eye.get("interval_minutes") if eye else 20) * 60000,
-            "duration_ms": (eye.get("duration_seconds") if eye else 20) * 1000
+            "interval_ms": eye_interval,
+            "duration_ms": eye_duration
         },
+
         "stretch": {
             "enabled": stretch_enabled,
-            "interval_ms": (stretch.get("interval_minutes") if stretch else 60) * 60000
+            "interval_ms": stretch_interval
         },
+
         "walk": {
             "enabled": walk_enabled,
-            "interval_ms": (walk.get("interval_minutes") if walk else 60) * 60000
+            "interval_ms": walk_interval
         },
+
         "dnd": dnd,
-        "schedule": generate_schedule(tasks, (sh, sm), (eh, em), dnd)
+        "schedule": schedule,
+
+        "clean": {"enabled": True},
+        "pomo": {"enabled": False},
+        "healing": {"enabled": False},
+        "meditation": {"enabled": False},
+        "custom": {"enabled": False},
+
+        "priority": []
     }
+
+
+# =========================
+# ROUTES
+# =========================
+@app.route("/")
+def home():
+    return "Adaptive Scheduler Engine 🚀"
 
 
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
-    start_time = time.time()
-    logs = []
-
-    def log(msg):
-        logs.append(f"{datetime.now(IST).strftime('%H:%M:%S')} - {msg}")
-
     try:
-        data = request.get_json()
-        user_text = data.get("text")
+        start_time = datetime.now(pytz.utc).astimezone(IST)
+        logs = []
+
+        def log(step):
+            current_time = datetime.now(pytz.utc).astimezone(IST).strftime('%H:%M:%S')
+            logs.append(f"{current_time} - {step}")
 
         log("Request received")
+
+        data = request.get_json()
+        if not data or "text" not in data:
+            return jsonify({"error": "Missing text"}), 400
+
+        user_text = data.get("text")
+
         log("Calling OpenAI")
 
         response = client.responses.create(
@@ -393,28 +378,24 @@ def parse_schedule():
             ]
         )
 
+        raw_text = response.output_text
         log("Model response received")
 
-        raw = response.output_text
-
-        parsed = safe_json_parse(raw)
+        parsed = safe_json_parse(raw_text)
         log("JSON parsed safely")
 
-        parsed = ensure_defaults(parsed)
-        parsed = infer_active_window(user_text, parsed)
-        log("Defaults + active window applied")
+        final_output = convert_to_device_schema(parsed)
 
-        final = convert(parsed)
         log("Converted to schema")
 
-        elapsed = round(time.time() - start_time, 2)
-        log(f"Total elapsed: {elapsed}s")
+        processing_time = datetime.now(pytz.utc).astimezone(IST) - start_time
+        log(f"Total time: {round(processing_time.total_seconds(), 2)}s")
 
-        return jsonify({"data": final, "logs": logs})
+        return jsonify({"data": final_output, "logs": logs})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run(host="0.0.0.0", port=5000)
