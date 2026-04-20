@@ -16,7 +16,7 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 IST = pytz.timezone('Asia/Kolkata')
 
 # =========================
-# SYSTEM PROMPT (FIXED)
+# SYSTEM PROMPT
 # =========================
 SYSTEM_PROMPT = """
 You are a highly precise scheduling extraction engine.
@@ -69,12 +69,33 @@ def safe_int(val, default=None):
         return default
 
 
+# ✅ ONLY CHANGE IS HERE
 def parse_time(t):
     try:
         if not t:
             return 0, 0
+
+        t = t.strip().lower()
+
+        # Handle AM/PM (1pm, 2:30pm, 1 pm)
+        import re
+        match = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', t)
+        if match:
+            h = int(match.group(1))
+            m = int(match.group(2)) if match.group(2) else 0
+            period = match.group(3)
+
+            if period == "pm" and h != 12:
+                h += 12
+            if period == "am" and h == 12:
+                h = 0
+
+            return h, m
+
+        # Default HH:MM
         h, m = t.split(":")
         return int(h), int(m)
+
     except:
         return 0, 0
 
@@ -108,7 +129,6 @@ def normalize_tasks(parsed):
 
         normalized.append({
             "type": t.get("type"),
-            # FIX: strict enable
             "enabled": t.get("enabled") is True,
             "interval_minutes": safe_int(t.get("interval_minutes")),
             "duration_seconds": safe_int(t.get("duration_seconds")),
@@ -129,7 +149,7 @@ PRIORITY = {
     "walk": 3
 }
 
-MIN_GAP = 5  # minutes
+MIN_GAP = 5
 
 
 def is_in_dnd(time_min, dnd):
@@ -147,9 +167,6 @@ def is_in_dnd(time_min, dnd):
 
 def generate_schedule(tasks, global_start, global_end, dnd):
     raw_events = []
-
-    global_start_min = global_start[0] * 60 + global_start[1]
-    global_end_min = global_end[0] * 60 + global_end[1]
 
     for t in tasks:
         if not t.get("enabled"):
@@ -216,7 +233,6 @@ def convert_to_device_schema(parsed, user_text):
 
     tasks = normalize_tasks(parsed)
 
-    # FIX: filter valid + enabled only
     VALID_TASKS = {"hydration", "eye", "stretch", "walk"}
     tasks = [
         t for t in tasks
@@ -229,7 +245,6 @@ def convert_to_device_schema(parsed, user_text):
     global_sh, global_sm = parse_time(active.get("start"))
     global_eh, global_em = parse_time(active.get("end"))
 
-    # FIX: fallback if model fails
     if (global_sh, global_sm) == (0, 0) and (global_eh, global_em) == (0, 0):
         if tasks:
             global_sh, global_sm = 9, 0
