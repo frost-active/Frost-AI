@@ -108,14 +108,35 @@ def normalize_tasks(parsed):
 
 
 # =========================
-# 🧠 SCHEDULER ENGINE (NEW)
+# 🧠 SMART + ADAPTIVE ENGINE
 # =========================
-def generate_schedule(tasks, global_start, global_end):
-    schedule = []
+PRIORITY = {
+    "hydration": 1,
+    "eye": 2,
+    "stretch": 3,
+    "walk": 3
+}
+
+MIN_GAP = 5  # minutes
+
+
+def is_in_dnd(time_min, dnd):
+    if not dnd["enabled"]:
+        return False
+
+    start = dnd["sh"] * 60 + dnd["sm"]
+    end = dnd["eh"] * 60 + dnd["em"]
+
+    return start <= time_min <= end
+
+
+def generate_schedule(tasks, global_start, global_end, dnd):
+    raw_events = []
 
     start_minutes = global_start[0] * 60 + global_start[1]
     end_minutes = global_end[0] * 60 + global_end[1]
 
+    # Step 1: Generate raw events
     for t in tasks:
         if not t.get("enabled"):
             continue
@@ -127,18 +148,54 @@ def generate_schedule(tasks, global_start, global_end):
         current = start_minutes + interval
 
         while current <= end_minutes:
-            hour = current // 60
-            minute = current % 60
-
-            schedule.append({
-                "time": f"{str(hour).zfill(2)}:{str(minute).zfill(2)}",
-                "task": t.get("type")
+            raw_events.append({
+                "time_min": current,
+                "task": t.get("type"),
+                "priority": PRIORITY.get(t.get("type"), 99)
             })
-
             current += interval
 
-    # Sort final timeline
-    schedule.sort(key=lambda x: x["time"])
+    # Step 2: Remove DND events
+    filtered = [
+        e for e in raw_events
+        if not is_in_dnd(e["time_min"], dnd)
+    ]
+
+    # Step 3: Sort by time then priority
+    filtered.sort(key=lambda x: (x["time_min"], x["priority"]))
+
+    final = []
+
+    for event in filtered:
+        if not final:
+            final.append(event)
+            continue
+
+        last = final[-1]
+
+        # Enforce minimum gap
+        if event["time_min"] - last["time_min"] < MIN_GAP:
+            new_time = last["time_min"] + MIN_GAP
+
+            if new_time <= end_minutes:
+                final.append({
+                    "time_min": new_time,
+                    "task": event["task"],
+                    "priority": event["priority"]
+                })
+        else:
+            final.append(event)
+
+    # Step 4: Format output
+    schedule = []
+    for e in final:
+        hour = e["time_min"] // 60
+        minute = e["time_min"] % 60
+
+        schedule.append({
+            "time": f"{str(hour).zfill(2)}:{str(minute).zfill(2)}",
+            "task": e["task"]
+        })
 
     return schedule
 
@@ -154,7 +211,6 @@ def convert_to_device_schema(parsed):
     dnd_list = parsed.get("do_not_disturb") or []
     exclusions = parsed.get("exclusions") or []
 
-    # GLOBAL WINDOW
     global_sh, global_sm = parse_time(active.get("start"))
     global_eh, global_em = parse_time(active.get("end"))
 
@@ -177,17 +233,8 @@ def convert_to_device_schema(parsed):
     h_enabled = hydration.get("enabled", False)
     h_interval = (hydration.get("interval_minutes") or 30) * 60 * 1000
 
-    sh, sm = (
-        parse_time(hydration.get("start_time"))
-        if hydration.get("start_time")
-        else (global_sh, global_sm)
-    )
-
-    eh, em = (
-        parse_time(hydration.get("end_time"))
-        if hydration.get("end_time")
-        else (global_eh, global_em)
-    )
+    sh, sm = parse_time(hydration.get("start_time")) if hydration.get("start_time") else (global_sh, global_sm)
+    eh, em = parse_time(hydration.get("end_time")) if hydration.get("end_time") else (global_eh, global_em)
 
     # EYE
     eye_enabled = eye.get("enabled", False)
@@ -244,20 +291,11 @@ def convert_to_device_schema(parsed):
         "times": abs_times
     }
 
-    # 🧠 GENERATE SCHEDULE
-    schedule = generate_schedule(
-        tasks,
-        (global_sh, global_sm),
-        (global_eh, global_em)
-    )
+    # FINAL SCHEDULE
+    schedule = generate_schedule(tasks, (global_sh, global_sm), (global_eh, global_em), dnd)
 
-    # FINAL OUTPUT
     return {
-        "_meta": {
-            "schema_ver": None,
-            "device": "FROST",
-            "ts_written": 0
-        },
+        "_meta": {"schema_ver": None, "device": "FROST", "ts_written": 0},
 
         "hydration": {
             "enabled": h_enabled,
@@ -292,8 +330,7 @@ def convert_to_device_schema(parsed):
         },
 
         "dnd": dnd,
-
-        "schedule": schedule,  # ✅ NEW
+        "schedule": schedule,
 
         "clean": {"enabled": True},
         "pomo": {"enabled": False},
@@ -310,7 +347,7 @@ def convert_to_device_schema(parsed):
 # =========================
 @app.route("/")
 def home():
-    return "Scheduler Engine Active 🚀"
+    return "Adaptive Scheduler Engine 🚀"
 
 
 @app.route("/parse", methods=["POST"])
@@ -326,7 +363,6 @@ def parse_schedule():
         log("Request received")
 
         data = request.get_json()
-
         if not data or "text" not in data:
             return jsonify({"error": "Missing text"}), 400
 
@@ -355,10 +391,7 @@ def parse_schedule():
         processing_time = datetime.now(pytz.utc).astimezone(IST) - start_time
         log(f"Total time: {round(processing_time.total_seconds(), 2)}s")
 
-        return jsonify({
-            "data": final_output,
-            "logs": logs
-        })
+        return jsonify({"data": final_output, "logs": logs})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
