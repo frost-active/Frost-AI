@@ -16,7 +16,7 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 IST = pytz.timezone('Asia/Kolkata')
 
 # =========================
-# SYSTEM PROMPT (REFINED)
+# SYSTEM PROMPT (FIXED)
 # =========================
 SYSTEM_PROMPT = """
 You are a highly precise scheduling extraction engine.
@@ -33,10 +33,16 @@ Always return:
 
 Rules:
 - Use 24-hour format HH:MM
-- Never omit a mentioned task
-- Always include interval_minutes
+- NEVER add tasks not explicitly mentioned
+- Defaults apply ONLY if the task is mentioned
 
-Tasks:
+Only supported tasks:
+- hydration
+- eye
+- stretch
+- walk
+
+Task rules:
 - hydration → default 30 min
 - eye → default 20 min, duration 20 sec
 - stretch → default 60 min
@@ -102,7 +108,8 @@ def normalize_tasks(parsed):
 
         normalized.append({
             "type": t.get("type"),
-            "enabled": bool(t.get("enabled", True)),
+            # FIX: strict enable
+            "enabled": t.get("enabled") is True,
             "interval_minutes": safe_int(t.get("interval_minutes")),
             "duration_seconds": safe_int(t.get("duration_seconds")),
             "start_time": t.get("start_time"),
@@ -132,7 +139,6 @@ def is_in_dnd(time_min, dnd):
     start = dnd["sh"] * 60 + dnd["sm"]
     end = dnd["eh"] * 60 + dnd["em"]
 
-    # FIX: handle overnight DND
     if start <= end:
         return start <= time_min <= end
     else:
@@ -145,18 +151,14 @@ def generate_schedule(tasks, global_start, global_end, dnd):
     global_start_min = global_start[0] * 60 + global_start[1]
     global_end_min = global_end[0] * 60 + global_end[1]
 
-    # Step 1: Generate events (respect per-task windows)
     for t in tasks:
         if not t.get("enabled"):
             continue
 
         interval = t.get("interval_minutes")
-
-        # FIX: do not skip valid 0-like values incorrectly
         if interval is None:
             continue
 
-        # FIX: respect per-task start/end
         sh, sm = parse_time(t.get("start_time")) if t.get("start_time") else global_start
         eh, em = parse_time(t.get("end_time")) if t.get("end_time") else global_end
 
@@ -173,13 +175,11 @@ def generate_schedule(tasks, global_start, global_end, dnd):
             })
             current += interval
 
-    # Step 2: Remove DND events
     filtered = [
         e for e in raw_events
         if not is_in_dnd(e["time_min"], dnd)
     ]
 
-    # Step 3: Sort
     filtered.sort(key=lambda x: (x["time_min"], x["priority"]))
 
     final = []
@@ -191,13 +191,11 @@ def generate_schedule(tasks, global_start, global_end, dnd):
 
         last = final[-1]
 
-        # FIX: do NOT shift time → just skip if too close
         if event["time_min"] - last["time_min"] < MIN_GAP:
             continue
         else:
             final.append(event)
 
-    # Step 4: Format
     schedule = []
     for e in final:
         hour = e["time_min"] // 60
@@ -214,15 +212,28 @@ def generate_schedule(tasks, global_start, global_end, dnd):
 # =========================
 # DEVICE SCHEMA
 # =========================
-def convert_to_device_schema(parsed):
+def convert_to_device_schema(parsed, user_text):
 
     tasks = normalize_tasks(parsed)
+
+    # FIX: filter valid + enabled only
+    VALID_TASKS = {"hydration", "eye", "stretch", "walk"}
+    tasks = [
+        t for t in tasks
+        if t.get("type") in VALID_TASKS and t.get("enabled")
+    ]
 
     active = parsed.get("active_window") or {}
     dnd_list = parsed.get("do_not_disturb") or []
 
     global_sh, global_sm = parse_time(active.get("start"))
     global_eh, global_em = parse_time(active.get("end"))
+
+    # FIX: fallback if model fails
+    if (global_sh, global_sm) == (0, 0) and (global_eh, global_em) == (0, 0):
+        if tasks:
+            global_sh, global_sm = 9, 0
+            global_eh, global_em = 17, 0
 
     hydration = {}
     eye = {}
@@ -239,27 +250,22 @@ def convert_to_device_schema(parsed):
         elif t["type"] == "walk":
             walk = t
 
-    # HYDRATION
     h_enabled = hydration.get("enabled", False)
     h_interval = (hydration.get("interval_minutes") or 30) * 60 * 1000
 
     sh, sm = parse_time(hydration.get("start_time")) if hydration.get("start_time") else (global_sh, global_sm)
     eh, em = parse_time(hydration.get("end_time")) if hydration.get("end_time") else (global_eh, global_em)
 
-    # EYE
     eye_enabled = eye.get("enabled", False)
     eye_interval = (eye.get("interval_minutes") or 20) * 60 * 1000
     eye_duration = (eye.get("duration_seconds") or 20) * 1000
 
-    # STRETCH
     stretch_enabled = stretch.get("enabled", False)
     stretch_interval = (stretch.get("interval_minutes") or 60) * 60 * 1000
 
-    # WALK
     walk_enabled = walk.get("enabled", False)
     walk_interval = (walk.get("interval_minutes") or 60) * 60 * 1000
 
-    # DND
     dnd = {
         "enabled": False,
         "sh": 0, "sm": 0,
@@ -279,7 +285,6 @@ def convert_to_device_schema(parsed):
             "em": em_d
         })
 
-    # FINAL SCHEDULE
     schedule = generate_schedule(tasks, (global_sh, global_sm), (global_eh, global_em), dnd)
 
     return {
@@ -312,11 +317,6 @@ def convert_to_device_schema(parsed):
 # =========================
 # ROUTES
 # =========================
-@app.route("/")
-def home():
-    return "Adaptive Scheduler Engine 🚀"
-
-
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     try:
@@ -351,7 +351,7 @@ def parse_schedule():
         parsed = safe_json_parse(raw_text)
         log("JSON parsed safely")
 
-        final_output = convert_to_device_schema(parsed)
+        final_output = convert_to_device_schema(parsed, user_text)
 
         log("Converted to schema")
 
