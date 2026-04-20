@@ -5,6 +5,7 @@ import pytz
 from flask_cors import CORS
 from flask import Flask, request, jsonify
 from openai import OpenAI
+import re
 
 app = Flask(__name__)
 app.json.sort_keys = False
@@ -69,7 +70,6 @@ def safe_int(val, default=None):
         return default
 
 
-# ✅ ONLY CHANGE IS HERE
 def parse_time(t):
     try:
         if not t:
@@ -77,8 +77,6 @@ def parse_time(t):
 
         t = t.strip().lower()
 
-        # Handle AM/PM (1pm, 2:30pm, 1 pm)
-        import re
         match = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', t)
         if match:
             h = int(match.group(1))
@@ -92,12 +90,43 @@ def parse_time(t):
 
             return h, m
 
-        # Default HH:MM
         h, m = t.split(":")
         return int(h), int(m)
 
     except:
         return 0, 0
+
+
+# ✅ NEW: DND FALLBACK PARSER
+def extract_dnd_from_text(text):
+    match = re.search(
+        r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(to|-)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?',
+        text.lower()
+    )
+
+    if not match:
+        return None
+
+    def convert(h, m, period):
+        h = int(h)
+        m = int(m) if m else 0
+
+        if period == "pm" and h != 12:
+            h += 12
+        if period == "am" and h == 12:
+            h = 0
+
+        return h, m
+
+    sh = convert(match.group(1), match.group(2), match.group(3))
+    eh = convert(match.group(5), match.group(6), match.group(7))
+
+    return {
+        "sh": sh[0],
+        "sm": sh[1],
+        "eh": eh[0],
+        "em": eh[1]
+    }
 
 
 def safe_json_parse(text):
@@ -289,16 +318,29 @@ def convert_to_device_schema(parsed, user_text):
 
     if isinstance(dnd_list, list) and len(dnd_list) > 0:
         first = dnd_list[0]
+
         sh_d, sm_d = parse_time(first.get("start"))
         eh_d, em_d = parse_time(first.get("end"))
 
-        dnd.update({
-            "enabled": True,
-            "sh": sh_d,
-            "sm": sm_d,
-            "eh": eh_d,
-            "em": em_d
-        })
+        # ✅ FALLBACK FIX
+        if (sh_d, sm_d) == (0, 0) and (eh_d, em_d) == (0, 0):
+            fallback = extract_dnd_from_text(user_text)
+            if fallback:
+                dnd.update({
+                    "enabled": True,
+                    "sh": fallback["sh"],
+                    "sm": fallback["sm"],
+                    "eh": fallback["eh"],
+                    "em": fallback["em"]
+                })
+        else:
+            dnd.update({
+                "enabled": True,
+                "sh": sh_d,
+                "sm": sm_d,
+                "eh": eh_d,
+                "em": em_d
+            })
 
     schedule = generate_schedule(tasks, (global_sh, global_sm), (global_eh, global_em), dnd)
 
