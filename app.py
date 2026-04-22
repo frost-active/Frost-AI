@@ -52,7 +52,7 @@ Task rules:
 Each task:
 {
   "type": "hydration | eye | stretch | walk",
-  "enabled": true,
+  "enabled": True,
   "interval_minutes": number,
   "duration_seconds": number or None,
   "start_time": "HH:MM" or None,
@@ -356,7 +356,7 @@ def convert_to_device_schema(parsed, user_text):
   "tone_mode": "professional",
   "ui": {
     "action_log": {
-      "enabled": true,
+      "enabled": True,
       "show_ms": 3000
     }
   },
@@ -366,22 +366,22 @@ def convert_to_device_schema(parsed, user_text):
     "night_volume": 8,
     "night_start_hour": 22,
     "night_end_hour": 7,
-    "night_mode_enabled": false
+    "night_mode_enabled": False
   },
   "audio": {
-    "pomo_focus_music_enabled": true,
+    "pomo_focus_music_enabled": True,
     "pomo_focus_music_track": 101,
-    "pomo_focus_music_loop": true,
-    "meditation_music_enabled": true,
+    "pomo_focus_music_loop": True,
+    "meditation_music_enabled": True,
     "meditation_music_track": 31
   },
   "hydration": {
-    "enabled": false,
+    "enabled": False,
     "mode": "interval",
     "interval_ms": 7200000,
     "prompt_duration_ms": 60000,
     "prompt_gap_ms": 600000,
-    "require_ack": true,
+    "require_ack": True,
     "goal_ml": 2000,
     "start_hour": 7,
     "start_min": 0,
@@ -389,16 +389,16 @@ def convert_to_device_schema(parsed, user_text):
     "end_min": 0,
     "days": [],
     "abs": {
-      "enabled": false,
+      "enabled": False,
       "times": []
     }
   },
   "stretch": {
-    "enabled": false,
+    "enabled": False,
     "mode": "interval",
     "interval_ms": 900000,
     "duration_ms": 60000,
-    "require_ack": true,
+    "require_ack": True,
     "days": [
       "mon",
       "tue",
@@ -415,7 +415,7 @@ def convert_to_device_schema(parsed, user_text):
       }
     ],
     "abs": {
-      "enabled": false,
+      "enabled": False,
       "times": [
         {
           "h": 11,
@@ -425,10 +425,10 @@ def convert_to_device_schema(parsed, user_text):
     }
   },
   "eye": {
-    "enabled": false,
+    "enabled": False,
     "mode": "interval",
     "interval_ms": 1800000,
-    "require_ack": true,
+    "require_ack": True,
     "start_hour": 8,
     "start_min": 0,
     "end_hour": 20,
@@ -441,7 +441,7 @@ def convert_to_device_schema(parsed, user_text):
       "fri"
     ],
     "abs": {
-      "enabled": false,
+      "enabled": False,
       "times": [
         {
           "h": 11,
@@ -451,61 +451,61 @@ def convert_to_device_schema(parsed, user_text):
     }
   },
   "dnd": {
-    "enabled": false,
+    "enabled": False,
     "sh": 23,
     "sm": 0,
     "eh": 6,
     "em": 0,
-    "allow_med": true,
-    "allow_hydration": false,
-    "allow_stretch": false,
-    "allow_eye": false,
-    "allow_cleaning": false,
-    "allow_walk": false,
-    "allow_meditation": false,
-    "allow_healing": false,
-    "allow_custom": false,
-    "allow_pomodoro": false
+    "allow_med": True,
+    "allow_hydration": False,
+    "allow_stretch": False,
+    "allow_eye": False,
+    "allow_cleaning": False,
+    "allow_walk": False,
+    "allow_meditation": False,
+    "allow_healing": False,
+    "allow_custom": False,
+    "allow_pomodoro": False
   },
   "clean": {
-    "enabled": true,
+    "enabled": True,
     "soft_after_days": 2,
     "hard_after_days": 3,
     "soft_repeat_min": 60,
-    "sticky_hard": true,
-    "allow_device_ack": true,
+    "sticky_hard": True,
+    "allow_device_ack": True,
     "trigger_hour": 17,
     "trigger_min": 0
   },
   "pomo": {
-    "enabled": true,
+    "enabled": True,
     "focus_min": 25,
     "break_min": 5,
     "cycles": 4,
-    "lap_mode_enabled": true,
+    "lap_mode_enabled": True,
     "laps": [
       {
         "sh": 9,
         "sm": 0,
         "eh": 12,
         "em": 0,
-        "enabled": true
+        "enabled": True
       }
     ]
   },
   "healing": {
-    "enabled": false,
-    "require_dock": false,
+    "enabled": False,
+    "require_dock": False,
     "play_min": 25,
     "default_track": 18,
     "slots": []
   },
   "walk": {
-    "enabled": false,
+    "enabled": False,
     "mode": "interval",
     "interval_min": 120,
     "display_sec": 90,
-    "require_ack": true,
+    "require_ack": True,
     "start_hour": 8,
     "start_min": 0,
     "end_hour": 20,
@@ -518,7 +518,7 @@ def convert_to_device_schema(parsed, user_text):
       "fri"
     ],
     "abs": {
-      "enabled": false,
+      "enabled": False,
       "times": [
         {
           "h": 11,
@@ -528,7 +528,7 @@ def convert_to_device_schema(parsed, user_text):
     }
   },
   "meditation": {
-    "enabled": true,
+    "enabled": True,
     "sh": 11,
     "sm": 45,
     "eh": 11,
@@ -543,9 +543,9 @@ def convert_to_device_schema(parsed, user_text):
     ]
   },
   "medication_cfg": {
-    "enabled": false,
-    "require_ack": true,
-    "allow_device_ack": true,
+    "enabled": False,
+    "require_ack": True,
+    "allow_device_ack": True,
     "snooze_min": 15,
     "default_window_min": 120,
     "show_ms": 60000
@@ -581,8 +581,8 @@ def convert_to_device_schema(parsed, user_text):
     }
   ],
   "custom": {
-    "enabled": false,
-    "require_ack": true,
+    "enabled": False,
+    "require_ack": True,
     "snooze_min": 5,
     "events": [
       {
@@ -596,7 +596,7 @@ def convert_to_device_schema(parsed, user_text):
     ]
   },
   "ack_config": {
-    "force_mode": false
+    "force_mode": False
   },
   "custom_texts": {
     "hydration": "Time to drink water!",
