@@ -97,7 +97,6 @@ def parse_time(t):
         return 0, 0
 
 
-# ✅ NEW: DND FALLBACK PARSER
 def extract_dnd_from_text(text):
     match = re.search(
         r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(to|-)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?',
@@ -310,11 +309,14 @@ def convert_to_device_schema(parsed, user_text):
     walk_enabled = walk.get("enabled", False)
     walk_interval = (walk.get("interval_minutes") or 60) * 60 * 1000
 
+    # ✅ FIXED DND BLOCK
     dnd = {
         "enabled": False,
         "sh": 0, "sm": 0,
         "eh": 0, "em": 0
     }
+
+    dnd_applied = False
 
     if isinstance(dnd_list, list) and len(dnd_list) > 0:
         first = dnd_list[0]
@@ -322,53 +324,333 @@ def convert_to_device_schema(parsed, user_text):
         sh_d, sm_d = parse_time(first.get("start"))
         eh_d, em_d = parse_time(first.get("end"))
 
-        # ✅ FALLBACK FIX
-        if (sh_d, sm_d) == (0, 0) and (eh_d, em_d) == (0, 0):
-            fallback = extract_dnd_from_text(user_text)
-            if fallback:
-                dnd.update({
-                    "enabled": True,
-                    "sh": fallback["sh"],
-                    "sm": fallback["sm"],
-                    "eh": fallback["eh"],
-                    "em": fallback["em"]
-                })
-        else:
+        if not ((sh_d, sm_d) == (0, 0) and (eh_d, em_d) == (0, 0)):
             dnd.update({
                 "enabled": True,
                 "sh": sh_d,
                 "sm": sm_d,
                 "eh": eh_d,
-                "em": em_d
+                "em": eh_d
+            })
+            dnd_applied = True
+
+    if not dnd_applied:
+        fallback = extract_dnd_from_text(user_text)
+        if fallback:
+            dnd.update({
+                "enabled": True,
+                "sh": fallback["sh"],
+                "sm": fallback["sm"],
+                "eh": fallback["eh"],
+                "em": fallback["em"]
             })
 
     schedule = generate_schedule(tasks, (global_sh, global_sm), (global_eh, global_em), dnd)
 
     return {
-        "hydration": {
-            "enabled": h_enabled,
-            "interval_ms": h_interval,
-            "start_hour": sh,
-            "start_min": sm,
-            "end_hour": eh,
-            "end_min": em
-        },
-        "eye": {
-            "enabled": eye_enabled,
-            "interval_ms": eye_interval,
-            "duration_ms": eye_duration
-        },
-        "stretch": {
-            "enabled": stretch_enabled,
-            "interval_ms": stretch_interval
-        },
-        "walk": {
-            "enabled": walk_enabled,
-            "interval_ms": walk_interval
-        },
-        "dnd": dnd,
-        "schedule": schedule
+        "_meta": {
+    "schema_ver": null,
+    "device": "FROST",
+    "ts_written": 0
+  },
+  "tone_mode": "professional",
+  "ui": {
+    "action_log": {
+      "enabled": true,
+      "show_ms": 3000
     }
+  },
+  "dfplayer": {
+    "volume": 24,
+    "boot_volume": 15,
+    "night_volume": 8,
+    "night_start_hour": 22,
+    "night_end_hour": 7,
+    "night_mode_enabled": false
+  },
+  "audio": {
+    "pomo_focus_music_enabled": true,
+    "pomo_focus_music_track": 101,
+    "pomo_focus_music_loop": true,
+    "meditation_music_enabled": true,
+    "meditation_music_track": 31
+  },
+  "hydration": {
+    "enabled": false,
+    "mode": "interval",
+    "interval_ms": 7200000,
+    "prompt_duration_ms": 60000,
+    "prompt_gap_ms": 600000,
+    "require_ack": true,
+    "goal_ml": 2000,
+    "start_hour": 7,
+    "start_min": 0,
+    "end_hour": 22,
+    "end_min": 0,
+    "days": [],
+    "abs": {
+      "enabled": false,
+      "times": []
+    }
+  },
+  "stretch": {
+    "enabled": false,
+    "mode": "interval",
+    "interval_ms": 900000,
+    "duration_ms": 60000,
+    "require_ack": true,
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "phases": [
+      {
+        "sh": 9,
+        "sm": 0,
+        "eh": 17,
+        "em": 0
+      }
+    ],
+    "abs": {
+      "enabled": false,
+      "times": [
+        {
+          "h": 11,
+          "m": 18
+        }
+      ]
+    }
+  },
+  "eye": {
+    "enabled": false,
+    "mode": "interval",
+    "interval_ms": 1800000,
+    "require_ack": true,
+    "start_hour": 8,
+    "start_min": 0,
+    "end_hour": 20,
+    "end_min": 0,
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "abs": {
+      "enabled": false,
+      "times": [
+        {
+          "h": 11,
+          "m": 20
+        }
+      ]
+    }
+  },
+  "dnd": {
+    "enabled": false,
+    "sh": 23,
+    "sm": 0,
+    "eh": 6,
+    "em": 0,
+    "allow_med": true,
+    "allow_hydration": false,
+    "allow_stretch": false,
+    "allow_eye": false,
+    "allow_cleaning": false,
+    "allow_walk": false,
+    "allow_meditation": false,
+    "allow_healing": false,
+    "allow_custom": false,
+    "allow_pomodoro": false
+  },
+  "clean": {
+    "enabled": true,
+    "soft_after_days": 2,
+    "hard_after_days": 3,
+    "soft_repeat_min": 60,
+    "sticky_hard": true,
+    "allow_device_ack": true,
+    "trigger_hour": 17,
+    "trigger_min": 0
+  },
+  "pomo": {
+    "enabled": true,
+    "focus_min": 25,
+    "break_min": 5,
+    "cycles": 4,
+    "lap_mode_enabled": true,
+    "laps": [
+      {
+        "sh": 9,
+        "sm": 0,
+        "eh": 12,
+        "em": 0,
+        "enabled": true
+      }
+    ]
+  },
+  "healing": {
+    "enabled": false,
+    "require_dock": false,
+    "play_min": 25,
+    "default_track": 18,
+    "slots": []
+  },
+  "walk": {
+    "enabled": false,
+    "mode": "interval",
+    "interval_min": 120,
+    "display_sec": 90,
+    "require_ack": true,
+    "start_hour": 8,
+    "start_min": 0,
+    "end_hour": 20,
+    "end_min": 0,
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "abs": {
+      "enabled": false,
+      "times": [
+        {
+          "h": 11,
+          "m": 23
+        }
+      ]
+    }
+  },
+  "meditation": {
+    "enabled": true,
+    "sh": 11,
+    "sm": 45,
+    "eh": 11,
+    "em": 50,
+    "display_sec": 600,
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ]
+  },
+  "medication_cfg": {
+    "enabled": false,
+    "require_ack": true,
+    "allow_device_ack": true,
+    "snooze_min": 15,
+    "default_window_min": 120,
+    "show_ms": 60000
+  },
+  "medication": [
+    {
+      "label": "Morining Vitamins",
+      "start": "2026-04-16",
+      "end": "2026-05-11",
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ],
+      "doses": [
+        {
+          "h": 6,
+          "m": 12
+        },
+        {
+          "h": 11,
+          "m": 30
+        },
+        {
+          "h": 11,
+          "m": 32
+        }
+      ]
+    }
+  ],
+  "custom": {
+    "enabled": false,
+    "require_ack": true,
+    "snooze_min": 5,
+    "events": [
+      {
+        "h": 0,
+        "m": 0,
+        "label": "",
+        "show_ms": 60000,
+        "type": "absolute",
+        "date": "2026-04-16"
+      }
+    ]
+  },
+  "ack_config": {
+    "force_mode": false
+  },
+  "custom_texts": {
+    "hydration": "Time to drink water!",
+    "stretch": "Time to stretch!",
+    "eye": "Time for eye break!",
+    "walk": "Time for a short walk!",
+    "medication": "Medication reminder",
+    "healing": "Healing session",
+    "custom": "Custom reminder",
+    "clean_soft": "Bottle cleaning due (soft)",
+    "clean_hard": "Bottle cleaning overdue (hard)",
+    "meditation": "Meditation time",
+    "pomodoro_focus": "Focus time started",
+    "pomodoro_break": "Break time started"
+  },
+  "images": {
+    "hydration_p1": "drinkwater1",
+    "hydration_p2": "drinkwater2",
+    "hydration_paused": "placeBottleImage_inverted",
+    "eye": "rule",
+    "stretch": "image_time_to_stretch_inverted",
+    "medication": "image_medication_reminder_alt_inverted",
+    "clean_soft": "cleen_bottel_image",
+    "clean_hard": "clean_bottel_1",
+    "meditation": "meditation",
+    "healing": "waterRefillImage_inverted",
+    "walk": "short_walk",
+    "boot": "frost_logo",
+    "clock_bg": "clock_bg",
+    "clock_bg_dnd": "clock_bg_dnd",
+    "pomodoro_focus_bg": "pomodoro_focus_bg",
+    "pomodoro_break_bg": "pomodoro_break_bg",
+    "custom_bg": "frost_logo",
+    "hydration_data_screen": "wallpaper1",
+    "bottle_missing": "placeBottleImage_inverted"
+  },
+  "priority": [
+    "bottle_missing",
+    "clean_hard",
+    "clean_soft",
+    "medication",
+    "stretch",
+    "eye",
+    "hydration_paused",
+    "hydration_p1",
+    "hydration_p2",
+    "hydration_data_screen",
+    "meditation",
+    "healing",
+    "walk",
+    "custom",
+    "clock"
+  ]
+  }
 
 
 # =========================
