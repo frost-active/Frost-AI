@@ -54,9 +54,9 @@ Each task:
   "type": "hydration | eye | stretch | walk",
   "enabled": true,
   "interval_minutes": number,
-  "duration_seconds": number or none,
-  "start_time": "HH:MM" or none,
-  "end_time": "HH:MM" or none
+  "duration_seconds": number or None,
+  "start_time": "HH:MM" or None,
+  "end_time": "HH:MM" or None
 }
 """
 
@@ -349,7 +349,7 @@ def convert_to_device_schema(parsed, user_text):
 
     return {
         "_meta": {
-    "schema_ver": none,
+    "schema_ver": None,
     "device": "FROST",
     "ts_written": 0
   },
