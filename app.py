@@ -17,7 +17,7 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 # =========================
-# SYSTEM PROMPT (STRICT)
+# SYSTEM PROMPT (UPDATED WITH DND)
 # =========================
 SYSTEM_PROMPT = """
 You are a scheduling assistant.
@@ -27,24 +27,25 @@ Return ONLY valid JSON.
 SUPPORTED TASK TYPES:
 hydration, eye, stretch, walk
 
-Each task MUST follow:
-{
-  "type": "hydration | eye | stretch | walk",
-  "enabled": true,
-  "interval_minutes": number,
-  "duration_seconds": number (optional),
-  "start_time": "HH:MM" (optional),
-  "end_time": "HH:MM" (optional)
-}
+ALSO EXTRACT DO NOT DISTURB (DND):
+Examples:
+"no interruptions from 1 to 3"
+"dnd 14:00 to 16:00"
+"avoid reminders between 9 and 11"
 
-OUTPUT:
+FORMAT:
 {
   "active_window": {
     "start": "HH:MM",
     "end": "HH:MM"
   },
   "tasks": [],
-  "do_not_disturb": [],
+  "do_not_disturb": [
+    {
+      "start": "HH:MM",
+      "end": "HH:MM"
+    }
+  ],
   "exclusions": []
 }
 """
@@ -177,7 +178,7 @@ def convert_to_device_schema(parsed):
     global_start = parse_time(active.get("start"))
     global_end = parse_time(active.get("end"))
 
-    config = json.loads(json.dumps(BASE_CONFIG))  # deep copy
+    config = json.loads(json.dumps(BASE_CONFIG))
 
     config["_meta"] = {
         "schema_ver": None,
@@ -185,7 +186,24 @@ def convert_to_device_schema(parsed):
         "ts_written": 0
     }
 
-    # DEFAULT STRUCTURES
+    # DND DEFAULT
+    config["dnd"] = {
+        "enabled": False,
+        "sh": 0, "sm": 0,
+        "eh": 0, "em": 0,
+        "allow_med": True,
+        "allow_hydration": False,
+        "allow_stretch": False,
+        "allow_eye": False,
+        "allow_cleaning": False,
+        "allow_walk": False,
+        "allow_meditation": False,
+        "allow_healing": False,
+        "allow_custom": False,
+        "allow_pomodoro": False
+    }
+
+    # TASK DEFAULTS (UNCHANGED)
     config["hydration"] = {
         "enabled": False,
         "mode": "interval",
@@ -240,7 +258,7 @@ def convert_to_device_schema(parsed):
         "abs": {"enabled": False, "times": []}
     }
 
-    # APPLY TASKS
+    # APPLY TASKS (UNCHANGED)
     for t in tasks:
         start = t["start_time"] or global_start
         end = t["end_time"] or global_end
@@ -290,6 +308,23 @@ def convert_to_device_schema(parsed):
                 "end_min": em
             })
 
+    # APPLY DND
+    dnd_list = parsed.get("do_not_disturb") or []
+
+    if isinstance(dnd_list, list) and len(dnd_list) > 0:
+        first = dnd_list[0]
+        start = parse_time(first.get("start"))
+        end = parse_time(first.get("end"))
+
+        if start and end:
+            config["dnd"].update({
+                "enabled": True,
+                "sh": start[0],
+                "sm": start[1],
+                "eh": end[0],
+                "em": end[1]
+            })
+
     return config
 
 
@@ -319,9 +354,7 @@ def parse_schedule():
         )
 
         raw_text = response.output_text
-
         parsed = safe_json_parse(raw_text)
-
         final_output = convert_to_device_schema(parsed)
 
         return jsonify({"data": final_output})
