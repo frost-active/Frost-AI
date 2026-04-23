@@ -5,229 +5,330 @@ import pytz
 from flask_cors import CORS
 from flask import Flask, request, jsonify
 from openai import OpenAI
-import re
 
 app = Flask(__name__)
 app.json.sort_keys = False
 
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-IST = pytz.timezone("Asia/Kolkata")
+IST = pytz.timezone('Asia/Kolkata')
 
-with open("frost-config.json", "r") as f:
-    BASE_SCHEMA = json.load(f)
 
+# =========================
+# SYSTEM PROMPT (STRICT)
+# =========================
 SYSTEM_PROMPT = """
-You are a strict scheduling extraction engine.
+You are a scheduling assistant.
 
-Return ONLY valid JSON. No explanations.
+Return ONLY valid JSON.
 
-Schema:
-{
-  "active_window": { "start": "HH:MM", "end": "HH:MM" },
-  "tasks": [],
-  "do_not_disturb": [],
-  "exclusions": []
-}
+SUPPORTED TASK TYPES:
+hydration, eye, stretch, walk
 
-Rules:
-- Use 24-hour format HH:MM
-- Extract ONLY what user explicitly says
-- DO NOT hallucinate tasks
-- DO NOT assume defaults unless task is mentioned
-- Convert AM/PM to 24-hour format
-
-Allowed tasks:
-- hydration
-- eye
-- stretch
-- walk
-
-Each task:
+Each task MUST follow:
 {
   "type": "hydration | eye | stretch | walk",
   "enabled": true,
   "interval_minutes": number,
-  "duration_seconds": number or null,
-  "start_time": "HH:MM" or null,
-  "end_time": "HH:MM" or null
+  "duration_seconds": number (optional),
+  "start_time": "HH:MM" (optional),
+  "end_time": "HH:MM" (optional)
 }
 
-Defaults (only if mentioned):
-- hydration: 30 min
-- eye: 20 min (20 sec duration)
-- stretch: 60 min
-- walk: 90 min
-
-DND:
-Extract phrases like:
-- avoid notifications
-- do not disturb
-- no reminders
-
-Format:
+OUTPUT:
 {
-  "start": "HH:MM",
-  "end": "HH:MM"
+  "active_window": {
+    "start": "HH:MM",
+    "end": "HH:MM"
+  },
+  "tasks": [],
+  "do_not_disturb": [],
+  "exclusions": []
 }
-
-Return ONLY JSON.
 """
 
-def safe_int(v):
-    try: return int(v)
-    except: return None
+
+# =========================
+# BASE COMPANY CONFIG
+# =========================
+BASE_CONFIG = {
+  "tone_mode": "professional",
+  "ui": {
+    "action_log": {"enabled": True, "show_ms": 3000}
+  },
+  "dfplayer": {
+    "volume": 24,
+    "boot_volume": 15,
+    "night_volume": 8,
+    "night_start_hour": 22,
+    "night_end_hour": 7,
+    "night_mode_enabled": False
+  },
+  "audio": {
+    "pomo_focus_music_enabled": True,
+    "pomo_focus_music_track": 101,
+    "pomo_focus_music_loop": True,
+    "meditation_music_enabled": True,
+    "meditation_music_track": 31
+  },
+  "clean": {
+    "enabled": True,
+    "soft_after_days": 2,
+    "hard_after_days": 3,
+    "soft_repeat_min": 60,
+    "sticky_hard": True,
+    "allow_device_ack": True,
+    "trigger_hour": 17,
+    "trigger_min": 0
+  },
+  "pomo": {
+    "enabled": False,
+    "focus_min": 25,
+    "break_min": 5,
+    "cycles": 4,
+    "lap_mode_enabled": True,
+    "laps": []
+  },
+  "healing": {"enabled": False, "require_dock": False, "play_min": 25, "default_track": 18, "slots": []},
+  "meditation": {"enabled": False, "sh": 0, "sm": 0, "eh": 0, "em": 0, "display_sec": 600, "days": []},
+  "medication_cfg": {"enabled": False, "require_ack": True, "allow_device_ack": True, "snooze_min": 15, "default_window_min": 120, "show_ms": 60000},
+  "medication": [],
+  "custom": {"enabled": False, "require_ack": True, "snooze_min": 5, "events": []},
+  "ack_config": {"force_mode": False},
+  "custom_texts": {
+    "hydration": "Time to drink water!",
+    "stretch": "Time to stretch!",
+    "eye": "Time for eye break!",
+    "walk": "Time for a short walk!"
+  },
+  "images": {},
+  "priority": []
+}
+
+
+# =========================
+# HELPERS
+# =========================
+def safe_int(val, default=None):
+    try:
+        return int(val)
+    except:
+        return default
+
 
 def parse_time(t):
     try:
-        if not t: return 0,0
-        t = t.strip().lower()
-        m = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', t)
-        if m:
-            h = int(m.group(1))
-            mnt = int(m.group(2)) if m.group(2) else 0
-            if m.group(3)=="pm" and h!=12: h+=12
-            if m.group(3)=="am" and h==12: h=0
-            return h,mnt
-        h,mnt = t.split(":")
-        return int(h),int(mnt)
+        if not t:
+            return None
+        h, m = t.split(":")
+        return int(h), int(m)
     except:
-        return 0,0
+        return None
 
-def extract_dnd(text):
-    m = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(to|-)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', text.lower())
-    if not m: return None
 
-    def cv(h,mn,p):
-        h=int(h); mn=int(mn) if mn else 0
-        if p=="pm" and h!=12: h+=12
-        if p=="am" and h==12: h=0
-        return h,mn
-
-    sh=cv(m.group(1),m.group(2),m.group(3))
-    eh=cv(m.group(5),m.group(6),m.group(7))
-    return {"sh":sh[0],"sm":sh[1],"eh":eh[0],"em":eh[1]}
-
-def normalize(parsed):
-    tasks = parsed.get("tasks")
-    if not isinstance(tasks,list): return []
-    out=[]
-    for t in tasks:
-        if not isinstance(t,dict): continue
-        out.append({
-            "type":t.get("type"),
-            "enabled":t.get("enabled") is True,
-            "interval":safe_int(t.get("interval_minutes")),
-            "duration":safe_int(t.get("duration_seconds"))
-        })
-    return out
-
-def schedule(tasks,start,end,dnd):
-    res=[]
-    s=start[0]*60+start[1]
-    e=end[0]*60+end[1]
-
-    for t in tasks:
-        if not t["enabled"]: continue
-        iv=t["interval"]
-        if iv is None:
-            if t["type"]=="hydration": iv=30
-            elif t["type"]=="eye": iv=20
-            elif t["type"]=="stretch": iv=60
-            elif t["type"]=="walk": iv=90
-            else: continue
-
-        cur=s+iv
-        while cur<=e:
-            blocked=False
-            if dnd["enabled"]:
-                ds=dnd["sh"]*60+dnd["sm"]
-                de=dnd["eh"]*60+dnd["em"]
-                if ds<=de: blocked=ds<=cur<=de
-                else: blocked=cur>=ds or cur<=de
-
-            if not blocked:
-                res.append({"time":f"{cur//60:02d}:{cur%60:02d}","task":t["type"]})
-
-            cur+=iv
-    return res
-
-def convert(parsed,text):
-    cfg=json.loads(json.dumps(BASE_SCHEMA))
-
-    tasks=normalize(parsed)
-    tasks=[t for t in tasks if t["enabled"]]
-
-    aw=parsed.get("active_window") or {}
-    sh,sm=parse_time(aw.get("start"))
-    eh,em=parse_time(aw.get("end"))
-
-    if sh==0 and eh==0 and tasks:
-        sh,sm=9,0; eh,em=17,0
-
-    h=next((t for t in tasks if t["type"]=="hydration"),{})
-    e=next((t for t in tasks if t["type"]=="eye"),{})
-    s=next((t for t in tasks if t["type"]=="stretch"),{})
-    w=next((t for t in tasks if t["type"]=="walk"),{})
-
-    cfg["_meta"]["ts_written"]=int(datetime.now().timestamp())
-
-    cfg["hydration"]["enabled"]=h.get("enabled",False)
-    cfg["hydration"]["interval_ms"]=(h.get("interval") or 30)*60000
-    cfg["hydration"]["start_hour"]=sh
-    cfg["hydration"]["start_min"]=sm
-    cfg["hydration"]["end_hour"]=eh
-    cfg["hydration"]["end_min"]=em
-
-    cfg["eye"]["enabled"]=e.get("enabled",False)
-    cfg["eye"]["interval_ms"]=(e.get("interval") or 20)*60000
-    cfg["eye"]["start_hour"]=sh
-    cfg["eye"]["start_min"]=sm
-    cfg["eye"]["end_hour"]=eh
-    cfg["eye"]["end_min"]=em
-
-    cfg["stretch"]["enabled"]=s.get("enabled",False)
-    cfg["stretch"]["interval_ms"]=(s.get("interval") or 60)*60000
-    cfg["stretch"]["start_hour"]=sh
-    cfg["stretch"]["start_min"]=sm
-    cfg["stretch"]["end_hour"]=eh
-    cfg["stretch"]["end_min"]=em
-
-    cfg["walk"]["enabled"]=w.get("enabled",False)
-    cfg["walk"]["interval_min"]=(w.get("interval") or 60)
-
-    dnd={"enabled":False,"sh":0,"sm":0,"eh":0,"em":0}
-    fallback=extract_dnd(text)
-    if fallback:
-        dnd.update({"enabled":True,**fallback})
-
-    cfg["dnd"].update(dnd)
-
-    cfg["schedule"]=schedule(tasks,(sh,sm),(eh,em),dnd)
-
-    return cfg
-
-@app.route("/parse",methods=["POST"])
-def parse():
+def safe_json_parse(text):
     try:
-        data=request.get_json()
-        text=data.get("text")
+        return json.loads(text)
+    except:
+        return {
+            "active_window": {},
+            "tasks": [],
+            "do_not_disturb": [],
+            "exclusions": []
+        }
 
-        res=client.responses.create(
+
+# =========================
+# NORMALIZE TASKS
+# =========================
+def normalize_tasks(parsed):
+    tasks = parsed.get("tasks")
+    if not isinstance(tasks, list):
+        return []
+
+    normalized = []
+
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+
+        normalized.append({
+            "type": t.get("type"),
+            "enabled": bool(t.get("enabled", True)),
+            "interval_minutes": safe_int(t.get("interval_minutes")),
+            "duration_seconds": safe_int(t.get("duration_seconds")),
+            "start_time": parse_time(t.get("start_time")),
+            "end_time": parse_time(t.get("end_time"))
+        })
+
+    return normalized
+
+
+# =========================
+# FINAL CONVERSION
+# =========================
+def convert_to_device_schema(parsed):
+
+    tasks = normalize_tasks(parsed)
+    active = parsed.get("active_window") or {}
+
+    global_start = parse_time(active.get("start"))
+    global_end = parse_time(active.get("end"))
+
+    config = json.loads(json.dumps(BASE_CONFIG))  # deep copy
+
+    config["_meta"] = {
+        "schema_ver": None,
+        "device": "FROST",
+        "ts_written": 0
+    }
+
+    # DEFAULT STRUCTURES
+    config["hydration"] = {
+        "enabled": False,
+        "mode": "interval",
+        "interval_ms": 1800000,
+        "prompt_duration_ms": 60000,
+        "prompt_gap_ms": 600000,
+        "require_ack": True,
+        "goal_ml": 2000,
+        "start_hour": 7,
+        "start_min": 0,
+        "end_hour": 22,
+        "end_min": 0,
+        "days": [],
+        "abs": {"enabled": False, "times": []}
+    }
+
+    config["eye"] = {
+        "enabled": False,
+        "mode": "interval",
+        "interval_ms": 1800000,
+        "require_ack": True,
+        "start_hour": 8,
+        "start_min": 0,
+        "end_hour": 20,
+        "end_min": 0,
+        "days": [],
+        "abs": {"enabled": False, "times": []}
+    }
+
+    config["stretch"] = {
+        "enabled": False,
+        "mode": "interval",
+        "interval_ms": 3600000,
+        "duration_ms": 60000,
+        "require_ack": True,
+        "days": [],
+        "phases": [],
+        "abs": {"enabled": False, "times": []}
+    }
+
+    config["walk"] = {
+        "enabled": False,
+        "mode": "interval",
+        "interval_min": 120,
+        "display_sec": 90,
+        "require_ack": True,
+        "start_hour": 8,
+        "start_min": 0,
+        "end_hour": 20,
+        "end_min": 0,
+        "days": [],
+        "abs": {"enabled": False, "times": []}
+    }
+
+    # APPLY TASKS
+    for t in tasks:
+        start = t["start_time"] or global_start
+        end = t["end_time"] or global_end
+
+        sh, sm = start if start else (0, 0)
+        eh, em = end if end else (23, 59)
+
+        if t["type"] == "hydration":
+            config["hydration"].update({
+                "enabled": True,
+                "interval_ms": (t["interval_minutes"] or 30) * 60000,
+                "start_hour": sh,
+                "start_min": sm,
+                "end_hour": eh,
+                "end_min": em
+            })
+
+        elif t["type"] == "eye":
+            config["eye"].update({
+                "enabled": True,
+                "interval_ms": (t["interval_minutes"] or 20) * 60000,
+                "start_hour": sh,
+                "start_min": sm,
+                "end_hour": eh,
+                "end_min": em
+            })
+
+        elif t["type"] == "stretch":
+            config["stretch"].update({
+                "enabled": True,
+                "interval_ms": (t["interval_minutes"] or 60) * 60000,
+                "phases": [{
+                    "sh": sh,
+                    "sm": sm,
+                    "eh": eh,
+                    "em": em
+                }]
+            })
+
+        elif t["type"] == "walk":
+            config["walk"].update({
+                "enabled": True,
+                "interval_min": t["interval_minutes"] or 120,
+                "start_hour": sh,
+                "start_min": sm,
+                "end_hour": eh,
+                "end_min": em
+            })
+
+    return config
+
+
+# =========================
+# ROUTES
+# =========================
+@app.route("/")
+def home():
+    return "Adaptive Scheduler Engine 🚀"
+
+
+@app.route("/parse", methods=["POST"])
+def parse_schedule():
+    try:
+        data = request.get_json()
+        if not data or "text" not in data:
+            return jsonify({"error": "Missing text"}), 400
+
+        user_text = data.get("text")
+
+        response = client.responses.create(
             model="gpt-5-nano",
             input=[
-                {"role":"system","content":SYSTEM_PROMPT},
-                {"role":"user","content":text}
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text}
             ]
         )
 
-        parsed=json.loads(res.output_text)
-        return jsonify({"data":convert(parsed,text)})
+        raw_text = response.output_text
+
+        parsed = safe_json_parse(raw_text)
+
+        final_output = convert_to_device_schema(parsed)
+
+        return jsonify({"data": final_output})
 
     except Exception as e:
-        return jsonify({"error":str(e)}),400
+        return jsonify({"error": str(e)}), 400
 
-if __name__=="__main__":
-    app.run(port=5000)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
