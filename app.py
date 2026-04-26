@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import pytz
 from flask_cors import CORS
 from flask import Flask, request, jsonify
@@ -17,48 +17,57 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 # =========================
-# SYSTEM PROMPT (UPDATED WITH DND)
+# SYSTEM PROMPT (IMPROVED + MEDICATION)
 # =========================
 SYSTEM_PROMPT = """
-You are a scheduling assistant.
+You are a strict scheduling assistant.
 
-Return ONLY valid JSON.
+Return ONLY valid JSON. No explanation text.
 
 SUPPORTED TASK TYPES:
 hydration, eye, stretch, walk
 
-ALSO EXTRACT DO NOT DISTURB (DND):
-Examples:
-"no interruptions from 1 to 3"
-"dnd 14:00 to 16:00"
-"avoid reminders between 9 and 11"
+MEDICATION SUPPORT:
+Extract medication schedules separately.
 
-FORMAT:
+MEDICATION FORMAT:
+{
+  "label": "string",
+  "start": "YYYY-MM-DD",
+  "end": "YYYY-MM-DD",
+  "days": ["mon","tue","wed","thu","fri","sat","sun"],
+  "times": ["HH:MM","HH:MM"]
+}
+
+RULES:
+- Always normalize time to 24-hour HH:MM
+- If days not mentioned → assume all days
+- If start/end dates not mentioned → leave null
+- Extract multiple medications if present
+
+DO NOT DISTURB (DND):
+Extract all DND ranges.
+
+FINAL FORMAT:
 {
   "active_window": {
     "start": "HH:MM",
     "end": "HH:MM"
   },
   "tasks": [],
-  "do_not_disturb": [
-    {
-      "start": "HH:MM",
-      "end": "HH:MM"
-    }
-  ],
+  "medication": [],
+  "do_not_disturb": [],
   "exclusions": []
 }
 """
 
 
 # =========================
-# BASE COMPANY CONFIG
+# BASE CONFIG
 # =========================
 BASE_CONFIG = {
   "tone_mode": "professional",
-  "ui": {
-    "action_log": {"enabled": True, "show_ms": 3000}
-  },
+  "ui": {"action_log": {"enabled": True, "show_ms": 3000}},
   "dfplayer": {
     "volume": 24,
     "boot_volume": 15,
@@ -84,14 +93,7 @@ BASE_CONFIG = {
     "trigger_hour": 17,
     "trigger_min": 0
   },
-  "pomo": {
-    "enabled": False,
-    "focus_min": 25,
-    "break_min": 5,
-    "cycles": 4,
-    "lap_mode_enabled": True,
-    "laps": []
-  },
+  "pomo": {"enabled": False, "focus_min": 25, "break_min": 5, "cycles": 4, "lap_mode_enabled": True, "laps": []},
   "healing": {"enabled": False, "require_dock": False, "play_min": 25, "default_track": 18, "slots": []},
   "meditation": {"enabled": False, "sh": 0, "sm": 0, "eh": 0, "em": 0, "display_sec": 600, "days": []},
   "medication_cfg": {"enabled": False, "require_ack": True, "allow_device_ack": True, "snooze_min": 15, "default_window_min": 120, "show_ms": 60000},
@@ -102,7 +104,8 @@ BASE_CONFIG = {
     "hydration": "Time to drink water!",
     "stretch": "Time to stretch!",
     "eye": "Time for eye break!",
-    "walk": "Time for a short walk!"
+    "walk": "Time for a short walk!",
+    "medication": "Medication reminder"
   },
   "images": {},
   "priority": []
@@ -136,6 +139,7 @@ def safe_json_parse(text):
         return {
             "active_window": {},
             "tasks": [],
+            "medication": [],
             "do_not_disturb": [],
             "exclusions": []
         }
@@ -159,7 +163,6 @@ def normalize_tasks(parsed):
             "type": t.get("type"),
             "enabled": bool(t.get("enabled", True)),
             "interval_minutes": safe_int(t.get("interval_minutes")),
-            "duration_seconds": safe_int(t.get("duration_seconds")),
             "start_time": parse_time(t.get("start_time")),
             "end_time": parse_time(t.get("end_time"))
         })
@@ -168,13 +171,56 @@ def normalize_tasks(parsed):
 
 
 # =========================
-# FINAL CONVERSION
+# NORMALIZE MEDICATION
+# =========================
+def normalize_medication(parsed):
+    meds = parsed.get("medication")
+    if not isinstance(meds, list):
+        return []
+
+    today = date.today().isoformat()
+    future = (date.today() + timedelta(days=30)).isoformat()
+
+    normalized = []
+
+    for m in meds:
+        if not isinstance(m, dict):
+            continue
+
+        times = m.get("times") or []
+        doses = []
+
+        for t in times:
+            parsed_time = parse_time(t)
+            if parsed_time:
+                doses.append({
+                    "h": parsed_time[0],
+                    "m": parsed_time[1]
+                })
+
+        if not doses:
+            continue
+
+        normalized.append({
+            "label": m.get("label", "Medication"),
+            "start": m.get("start") or today,
+            "end": m.get("end") or future,
+            "days": m.get("days", ["mon","tue","wed","thu","fri","sat","sun"]),
+            "doses": doses
+        })
+
+    return normalized
+
+
+# =========================
+# CONVERT TO DEVICE SCHEMA
 # =========================
 def convert_to_device_schema(parsed):
 
     tasks = normalize_tasks(parsed)
-    active = parsed.get("active_window") or {}
+    medications = normalize_medication(parsed)
 
+    active = parsed.get("active_window") or {}
     global_start = parse_time(active.get("start"))
     global_end = parse_time(active.get("end"))
 
@@ -183,10 +229,10 @@ def convert_to_device_schema(parsed):
     config["_meta"] = {
         "schema_ver": None,
         "device": "FROST",
-        "ts_written": 0
+        "ts_written": int(datetime.now(IST).timestamp())
     }
 
-    # DND DEFAULT
+    # DND
     config["dnd"] = {
         "enabled": False,
         "sh": 0, "sm": 0,
@@ -203,62 +249,7 @@ def convert_to_device_schema(parsed):
         "allow_pomodoro": False
     }
 
-    # TASK DEFAULTS (UNCHANGED)
-    config["hydration"] = {
-        "enabled": False,
-        "mode": "interval",
-        "interval_ms": 1800000,
-        "prompt_duration_ms": 60000,
-        "prompt_gap_ms": 600000,
-        "require_ack": True,
-        "goal_ml": 2000,
-        "start_hour": 7,
-        "start_min": 0,
-        "end_hour": 22,
-        "end_min": 0,
-        "days": [],
-        "abs": {"enabled": False, "times": []}
-    }
-
-    config["eye"] = {
-        "enabled": False,
-        "mode": "interval",
-        "interval_ms": 1800000,
-        "require_ack": True,
-        "start_hour": 8,
-        "start_min": 0,
-        "end_hour": 20,
-        "end_min": 0,
-        "days": [],
-        "abs": {"enabled": False, "times": []}
-    }
-
-    config["stretch"] = {
-        "enabled": False,
-        "mode": "interval",
-        "interval_ms": 3600000,
-        "duration_ms": 60000,
-        "require_ack": True,
-        "days": [],
-        "phases": [],
-        "abs": {"enabled": False, "times": []}
-    }
-
-    config["walk"] = {
-        "enabled": False,
-        "mode": "interval",
-        "interval_min": 120,
-        "display_sec": 90,
-        "require_ack": True,
-        "start_hour": 8,
-        "start_min": 0,
-        "end_hour": 20,
-        "end_min": 0,
-        "days": [],
-        "abs": {"enabled": False, "times": []}
-    }
-
-    # APPLY TASKS (UNCHANGED)
+    # APPLY TASKS
     for t in tasks:
         start = t["start_time"] or global_start
         end = t["end_time"] or global_end
@@ -267,51 +258,54 @@ def convert_to_device_schema(parsed):
         eh, em = end if end else (23, 59)
 
         if t["type"] == "hydration":
-            config["hydration"].update({
+            config["hydration"] = {
                 "enabled": True,
+                "mode": "interval",
                 "interval_ms": (t["interval_minutes"] or 30) * 60000,
                 "start_hour": sh,
                 "start_min": sm,
                 "end_hour": eh,
                 "end_min": em
-            })
+            }
 
         elif t["type"] == "eye":
-            config["eye"].update({
+            config["eye"] = {
                 "enabled": True,
+                "mode": "interval",
                 "interval_ms": (t["interval_minutes"] or 20) * 60000,
                 "start_hour": sh,
                 "start_min": sm,
                 "end_hour": eh,
                 "end_min": em
-            })
+            }
 
         elif t["type"] == "stretch":
-            config["stretch"].update({
+            config["stretch"] = {
                 "enabled": True,
+                "mode": "interval",
                 "interval_ms": (t["interval_minutes"] or 60) * 60000,
-                "phases": [{
-                    "sh": sh,
-                    "sm": sm,
-                    "eh": eh,
-                    "em": em
-                }]
-            })
+                "phases": [{"sh": sh, "sm": sm, "eh": eh, "em": em}]
+            }
 
         elif t["type"] == "walk":
-            config["walk"].update({
+            config["walk"] = {
                 "enabled": True,
+                "mode": "interval",
                 "interval_min": t["interval_minutes"] or 120,
                 "start_hour": sh,
                 "start_min": sm,
                 "end_hour": eh,
                 "end_min": em
-            })
+            }
 
-    # APPLY DND
+    # APPLY MEDICATION
+    if medications:
+        config["medication_cfg"]["enabled"] = True
+        config["medication"] = medications
+
+    # APPLY DND (first window for now)
     dnd_list = parsed.get("do_not_disturb") or []
-
-    if isinstance(dnd_list, list) and len(dnd_list) > 0:
+    if dnd_list:
         first = dnd_list[0]
         start = parse_time(first.get("start"))
         end = parse_time(first.get("end"))
