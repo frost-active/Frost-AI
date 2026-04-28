@@ -64,25 +64,114 @@ FINAL FORMAT:
 
 
 # =========================
-# BASE CONFIG (UNCHANGED)
+# BASE CONFIG (FULL, SAFE)
 # =========================
-BASE_CONFIG = { ... }  # KEEP YOUR FULL ORIGINAL CONFIG HERE
+BASE_CONFIG = {
+  "_meta": {"schema_ver": None, "device": "FROST", "ts_written": 0},
+  "tone_mode": "professional",
+  "ui": {"action_log": {"enabled": True, "show_ms": 3000}},
+  "dfplayer": {
+    "volume": 24, "boot_volume": 15, "night_volume": 8,
+    "night_start_hour": 22, "night_end_hour": 7,
+    "night_mode_enabled": False
+  },
+  "audio": {
+    "pomo_focus_music_enabled": True,
+    "pomo_focus_music_track": 101,
+    "pomo_focus_music_loop": True,
+    "meditation_music_enabled": True,
+    "meditation_music_track": 31
+  },
+  "hydration": {
+    "enabled": False, "mode": "interval",
+    "interval_ms": 7200000,
+    "prompt_duration_ms": 60000,
+    "prompt_gap_ms": 600000,
+    "require_ack": True,
+    "goal_ml": 2000,
+    "start_hour": 7, "start_min": 0,
+    "end_hour": 22, "end_min": 0,
+    "days": [],
+    "abs": {"enabled": False, "times": []}
+  },
+  "eye": {
+    "enabled": False, "mode": "interval",
+    "interval_ms": 1800000,
+    "require_ack": True,
+    "start_hour": 8, "start_min": 0,
+    "end_hour": 20, "end_min": 0,
+    "days": [],
+    "abs": {"enabled": False, "times": []}
+  },
+  "stretch": {
+    "enabled": False, "mode": "interval",
+    "interval_ms": 3600000,
+    "duration_ms": 60000,
+    "require_ack": True,
+    "days": [],
+    "phases": [],
+    "abs": {"enabled": False, "times": []}
+  },
+  "walk": {
+    "enabled": False, "mode": "interval",
+    "interval_min": 120,
+    "display_sec": 90,
+    "require_ack": True,
+    "start_hour": 8, "start_min": 0,
+    "end_hour": 20, "end_min": 0,
+    "days": [],
+    "abs": {"enabled": False, "times": []}
+  },
+  "dnd": {
+    "enabled": False,
+    "sh": 0, "sm": 0,
+    "eh": 0, "em": 0,
+    "allow_med": True,
+    "allow_hydration": False,
+    "allow_stretch": False,
+    "allow_eye": False,
+    "allow_cleaning": False,
+    "allow_walk": False,
+    "allow_meditation": False,
+    "allow_healing": False,
+    "allow_custom": False,
+    "allow_pomodoro": False
+  },
+  "medication_cfg": {
+    "enabled": False,
+    "require_ack": True,
+    "allow_device_ack": True,
+    "snooze_min": 15,
+    "default_window_min": 120,
+    "show_ms": 60000
+  },
+  "medication": [],
+  "custom": {"enabled": False, "require_ack": True, "snooze_min": 5, "events": []},
+  "ack_config": {"force_mode": False},
+  "custom_texts": {
+    "hydration": "Time to drink water!",
+    "stretch": "Time to stretch!",
+    "eye": "Time for eye break!",
+    "walk": "Time for a short walk!",
+    "medication": "Medication reminder"
+  },
+  "images": {},
+  "priority": []
+}
 
 
 # =========================
 # HELPERS
 # =========================
-def safe_int(val, default=None):
+def safe_int(val):
     try:
         return int(val)
     except:
-        return default
+        return None
 
 
 def parse_time(t):
     try:
-        if not t:
-            return None
         h, m = t.split(":")
         return int(h), int(m)
     except:
@@ -109,7 +198,7 @@ def normalize_days(days):
         if d in mapping:
             out.append(mapping[d])
 
-    return out or ["mon","tue","wed","thu","fri","sat","sun"]
+    return out if out else ["mon","tue","wed","thu","fri","sat","sun"]
 
 
 def resolve_dates(start, end):
@@ -117,10 +206,8 @@ def resolve_dates(start, end):
 
     if start and end:
         return start, end
-
     if start and not end:
         return start, (today + timedelta(days=30)).isoformat()
-
     if not start and not end:
         return today.isoformat(), (today + timedelta(days=7)).isoformat()
 
@@ -148,15 +235,13 @@ def normalize_tasks(parsed):
     out = []
 
     for t in tasks:
-        if not isinstance(t, dict):
-            continue
-
         out.append({
             "type": t.get("type"),
             "interval_minutes": safe_int(t.get("interval_minutes")),
             "start_time": parse_time(t.get("start_time")),
             "end_time": parse_time(t.get("end_time"))
         })
+
     return out
 
 
@@ -197,7 +282,7 @@ def build_plan(parsed):
 
 
 # =========================
-# CONVERTER (FIXED)
+# CONVERTER
 # =========================
 def convert_to_device_schema(plan):
 
@@ -208,7 +293,6 @@ def convert_to_device_schema(plan):
     global_start = parse_time(active.get("start"))
     global_end = parse_time(active.get("end"))
 
-    # ✅ TASKS RESTORED
     for t in plan.get("tasks", []):
         start = t["start_time"] or global_start
         end = t["end_time"] or global_end
@@ -220,68 +304,42 @@ def convert_to_device_schema(plan):
             config["hydration"].update({
                 "enabled": True,
                 "interval_ms": (t["interval_minutes"] or 30) * 60000,
-                "start_hour": sh,
-                "start_min": sm,
-                "end_hour": eh,
-                "end_min": em
+                "start_hour": sh, "start_min": sm,
+                "end_hour": eh, "end_min": em
             })
 
         elif t["type"] == "eye":
             config["eye"].update({
                 "enabled": True,
                 "interval_ms": (t["interval_minutes"] or 20) * 60000,
-                "start_hour": sh,
-                "start_min": sm,
-                "end_hour": eh,
-                "end_min": em
+                "start_hour": sh, "start_min": sm,
+                "end_hour": eh, "end_min": em
             })
 
         elif t["type"] == "stretch":
             config["stretch"].update({
                 "enabled": True,
                 "interval_ms": (t["interval_minutes"] or 60) * 60000,
-                "phases": [{
-                    "sh": sh,
-                    "sm": sm,
-                    "eh": eh,
-                    "em": em
-                }]
+                "phases": [{"sh": sh, "sm": sm, "eh": eh, "em": em}]
             })
 
         elif t["type"] == "walk":
             config["walk"].update({
                 "enabled": True,
                 "interval_min": t["interval_minutes"] or 120,
-                "start_hour": sh,
-                "start_min": sm,
-                "end_hour": eh,
-                "end_min": em
+                "start_hour": sh, "start_min": sm,
+                "end_hour": eh, "end_min": em
             })
 
-    # ✅ MEDICATION
     if plan.get("medication"):
         config["medication_cfg"]["enabled"] = True
         config["medication"] = plan["medication"]
-
-    # ✅ DND
-    dnd = plan.get("dnd") or []
-    if dnd:
-        s = parse_time(dnd[0].get("start"))
-        e = parse_time(dnd[0].get("end"))
-        if s and e:
-            config["dnd"].update({
-                "enabled": True,
-                "sh": s[0],
-                "sm": s[1],
-                "eh": e[0],
-                "em": e[1]
-            })
 
     return config
 
 
 # =========================
-# ROUTES
+# ROUTE
 # =========================
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
