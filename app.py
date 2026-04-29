@@ -1,5 +1,6 @@
 import os
 import json
+import time  # ✅ ADDED
 from datetime import datetime, date, timedelta
 import pytz
 from flask_cors import CORS
@@ -64,7 +65,7 @@ FINAL FORMAT:
 
 
 # =========================
-# BASE CONFIG (FULL, SAFE)
+# BASE CONFIG (UNCHANGED)
 # =========================
 BASE_CONFIG = {
   "_meta": {"schema_ver": None, "device": "FROST", "ts_written": 0},
@@ -161,7 +162,7 @@ BASE_CONFIG = {
 
 
 # =========================
-# HELPERS
+# HELPERS (UNCHANGED)
 # =========================
 def safe_int(val):
     try:
@@ -228,7 +229,7 @@ def safe_json_parse(text):
 
 
 # =========================
-# NORMALIZATION
+# NORMALIZATION (UNCHANGED)
 # =========================
 def normalize_tasks(parsed):
     tasks = parsed.get("tasks") or []
@@ -282,7 +283,7 @@ def build_plan(parsed):
 
 
 # =========================
-# CONVERTER
+# CONVERTER (UNCHANGED)
 # =========================
 def convert_to_device_schema(plan):
 
@@ -339,35 +340,60 @@ def convert_to_device_schema(plan):
 
 
 # =========================
-# ROUTE
+# ROUTE (UPDATED LOGS)
 # =========================
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
     logs = []
+    start_time = time.perf_counter()
 
     try:
         data = request.get_json()
-        logs.append("Received input")
+        logs.append("Step 1: Input received")
+
+        user_text = data.get("text", "")
 
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": data["text"]}
+                {"role": "user", "content": user_text}
             ]
         )
 
         raw = response.output_text
-        logs.append(f"LLM output: {raw[:200]}")
+        logs.append("Step 2: LLM response received")
+        logs.append(f"Preview: {raw[:120]}...")
 
         parsed = safe_json_parse(raw)
+        logs.append("Step 3: JSON parsed")
+
         plan = build_plan(parsed)
+        logs.append(f"Step 4: Tasks={len(plan['tasks'])}, Meds={len(plan['medication'])}")
+
         config = convert_to_device_schema(plan)
+        logs.append("Step 5: Device config generated")
+
+        enabled = [
+            k for k in ["hydration","eye","stretch","walk"]
+            if config.get(k, {}).get("enabled")
+        ]
+        logs.append(f"Enabled: {', '.join(enabled) if enabled else 'none'}")
+
+        if config.get("medication"):
+            logs.append(f"Medication count: {len(config['medication'])}")
+
+        elapsed = (time.perf_counter() - start_time) * 1000
+        logs.append(f"⏱ Total time: {round(elapsed, 2)} ms")
 
         return jsonify({"data": config, "logs": logs})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        elapsed = (time.perf_counter() - start_time) * 1000
+        logs.append(f"ERROR: {str(e)}")
+        logs.append(f"⏱ Total time: {round(elapsed, 2)} ms")
+
+        return jsonify({"error": str(e), "logs": logs}), 400
 
 
 @app.route("/")
