@@ -1,6 +1,6 @@
 import os
 import json
-import time  # ✅ ADDED
+import time
 from datetime import datetime, date, timedelta
 import pytz
 from flask_cors import CORS
@@ -18,7 +18,7 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 # =========================
-# SYSTEM PROMPT
+# SYSTEM PROMPT (UPDATED)
 # =========================
 SYSTEM_PROMPT = """
 You are a strict scheduling assistant.
@@ -28,6 +28,17 @@ Return ONLY valid JSON. No explanation text.
 SUPPORTED TASK TYPES:
 hydration, eye, stretch, walk
 
+ABSOLUTE MODE:
+- If user gives specific times (e.g. "at 9am, 1pm"):
+    - set times = ["09:00","13:00"]
+    - DO NOT include interval_minutes
+
+INTERVAL MODE:
+- If user says "every X minutes":
+    - set interval_minutes
+
+Never include both interval_minutes and times.
+
 MEDICATION FORMAT:
 {
   "label": "string",
@@ -36,22 +47,6 @@ MEDICATION FORMAT:
   "days": ["mon","tue","wed","thu","fri","sat","sun"],
   "times": ["HH:MM","HH:MM"]
 }
-
-RULES:
-- Always use 24-hour HH:MM
-- Normalize days to short form (mon, tue, ...)
-- If days missing → assume all days
-
-DATE HANDLING:
-- If user says "for X days":
-    start = today
-    end = today + X days
-- If user specifies start date:
-    use that
-- If both start and end provided:
-    use both
-- If nothing provided:
-    return null for start and end
 
 FINAL FORMAT:
 {
@@ -162,7 +157,7 @@ BASE_CONFIG = {
 
 
 # =========================
-# HELPERS (UNCHANGED)
+# HELPERS
 # =========================
 def safe_int(val):
     try:
@@ -180,38 +175,17 @@ def parse_time(t):
 
 
 def normalize_days(days):
-    mapping = {
-        "monday":"mon","mon":"mon",
-        "tuesday":"tue","tue":"tue",
-        "wednesday":"wed","wed":"wed",
-        "thursday":"thu","thu":"thu",
-        "friday":"fri","fri":"fri",
-        "saturday":"sat","sat":"sat",
-        "sunday":"sun","sun":"sun"
-    }
-
     if not isinstance(days, list):
         return ["mon","tue","wed","thu","fri","sat","sun"]
-
-    out = []
-    for d in days:
-        d = str(d).lower()
-        if d in mapping:
-            out.append(mapping[d])
-
-    return out if out else ["mon","tue","wed","thu","fri","sat","sun"]
+    return days
 
 
 def resolve_dates(start, end):
     today = date.today()
-
     if start and end:
         return start, end
-    if start and not end:
-        return start, (today + timedelta(days=30)).isoformat()
     if not start and not end:
         return today.isoformat(), (today + timedelta(days=7)).isoformat()
-
     return start, end
 
 
@@ -229,16 +203,28 @@ def safe_json_parse(text):
 
 
 # =========================
-# NORMALIZATION (UNCHANGED)
+# NORMALIZATION (UPDATED)
 # =========================
 def normalize_tasks(parsed):
     tasks = parsed.get("tasks") or []
     out = []
 
     for t in tasks:
+        times = t.get("times") or []
+
+        parsed_times = []
+        for ts in times:
+            pt = parse_time(ts)
+            if pt:
+                parsed_times.append({"h": pt[0], "m": pt[1]})
+
+        mode = "absolute" if parsed_times else "interval"
+
         out.append({
             "type": t.get("type"),
+            "mode": mode,
             "interval_minutes": safe_int(t.get("interval_minutes")),
+            "times": parsed_times,
             "start_time": parse_time(t.get("start_time")),
             "end_time": parse_time(t.get("end_time"))
         })
@@ -283,7 +269,7 @@ def build_plan(parsed):
 
 
 # =========================
-# CONVERTER (UNCHANGED)
+# CONVERTER (UPDATED)
 # =========================
 def convert_to_device_schema(plan):
 
@@ -295,42 +281,49 @@ def convert_to_device_schema(plan):
     global_end = parse_time(active.get("end"))
 
     for t in plan.get("tasks", []):
-        start = t["start_time"] or global_start
-        end = t["end_time"] or global_end
+
+        start = t.get("start_time") or global_start
+        end = t.get("end_time") or global_end
 
         sh, sm = start if start else (0, 0)
         eh, em = end if end else (23, 59)
 
+        def apply(task_key, interval_key, default_interval):
+            if t.get("mode") == "absolute" and t.get("times"):
+                config[task_key].update({
+                    "enabled": True,
+                    "mode": "absolute",
+                    "abs": {
+                        "enabled": True,
+                        "times": t["times"]
+                    }
+                })
+            else:
+                config[task_key].update({
+                    "enabled": True,
+                    "mode": "interval",
+                    interval_key: (t.get("interval_minutes") or default_interval) * (60000 if "ms" in interval_key else 1),
+                    "start_hour": sh,
+                    "start_min": sm,
+                    "end_hour": eh,
+                    "end_min": em
+                })
+
         if t["type"] == "hydration":
-            config["hydration"].update({
-                "enabled": True,
-                "interval_ms": (t["interval_minutes"] or 30) * 60000,
-                "start_hour": sh, "start_min": sm,
-                "end_hour": eh, "end_min": em
-            })
+            apply("hydration", "interval_ms", 30)
 
         elif t["type"] == "eye":
-            config["eye"].update({
-                "enabled": True,
-                "interval_ms": (t["interval_minutes"] or 20) * 60000,
-                "start_hour": sh, "start_min": sm,
-                "end_hour": eh, "end_min": em
-            })
+            apply("eye", "interval_ms", 20)
 
         elif t["type"] == "stretch":
-            config["stretch"].update({
-                "enabled": True,
-                "interval_ms": (t["interval_minutes"] or 60) * 60000,
-                "phases": [{"sh": sh, "sm": sm, "eh": eh, "em": em}]
-            })
+            apply("stretch", "interval_ms", 60)
+            if t.get("mode") != "absolute":
+                config["stretch"]["phases"] = [{
+                    "sh": sh, "sm": sm, "eh": eh, "em": em
+                }]
 
         elif t["type"] == "walk":
-            config["walk"].update({
-                "enabled": True,
-                "interval_min": t["interval_minutes"] or 120,
-                "start_hour": sh, "start_min": sm,
-                "end_hour": eh, "end_min": em
-            })
+            apply("walk", "interval_min", 120)
 
     if plan.get("medication"):
         config["medication_cfg"]["enabled"] = True
@@ -340,7 +333,7 @@ def convert_to_device_schema(plan):
 
 
 # =========================
-# ROUTE (UPDATED LOGS)
+# ROUTE
 # =========================
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
@@ -351,13 +344,11 @@ def parse_schedule():
         data = request.get_json()
         logs.append("Step 1: Input received")
 
-        user_text = data.get("text", "")
-
         response = client.responses.create(
             model="gpt-5-nano",
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_text}
+                {"role": "user", "content": data["text"]}
             ]
         )
 
