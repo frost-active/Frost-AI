@@ -18,7 +18,7 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 # =========================
-# SYSTEM PROMPT (UPDATED)
+# SYSTEM PROMPT (UNCHANGED)
 # =========================
 SYSTEM_PROMPT = """
 You are a strict scheduling assistant.
@@ -189,12 +189,27 @@ def resolve_dates(start, end):
     return start, end
 
 
+# =========================
+# ✅ UPDATED SAFE PARSER
+# =========================
 def safe_json_parse(text):
     try:
-        return json.loads(text)
+        data = json.loads(text)
+
+        if "active_window" not in data or not data["active_window"]:
+            data["active_window"] = {"start": "09:00", "end": "18:00"}
+
+        if not data["active_window"].get("start"):
+            data["active_window"]["start"] = "09:00"
+
+        if not data["active_window"].get("end"):
+            data["active_window"]["end"] = "18:00"
+
+        return data
+
     except:
         return {
-            "active_window": {},
+            "active_window": {"start": "09:00", "end": "18:00"},
             "tasks": [],
             "medication": [],
             "do_not_disturb": [],
@@ -203,7 +218,7 @@ def safe_json_parse(text):
 
 
 # =========================
-# NORMALIZATION (UPDATED)
+# NORMALIZATION (UNCHANGED)
 # =========================
 def normalize_tasks(parsed):
     tasks = parsed.get("tasks") or []
@@ -259,17 +274,25 @@ def normalize_medication(parsed):
     return out
 
 
+# =========================
+# ✅ UPDATED PLAN BUILDER
+# =========================
 def build_plan(parsed):
+    active = parsed.get("active_window") or {}
+
     return {
         "tasks": normalize_tasks(parsed),
         "medication": normalize_medication(parsed),
         "dnd": parsed.get("do_not_disturb", []),
-        "active_window": parsed.get("active_window", {})
+        "active_window": {
+            "start": active.get("start", "09:00"),
+            "end": active.get("end", "18:00")
+        }
     }
 
 
 # =========================
-# CONVERTER (UPDATED)
+# CONVERTER (UNCHANGED)
 # =========================
 def convert_to_device_schema(plan):
 
@@ -333,7 +356,7 @@ def convert_to_device_schema(plan):
 
 
 # =========================
-# ROUTE
+# ROUTE (UPDATED RETURN ONLY)
 # =========================
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
@@ -377,7 +400,11 @@ def parse_schedule():
         elapsed = (time.perf_counter() - start_time) * 1000
         logs.append(f"⏱ Total time: {round(elapsed, 2)} ms")
 
-        return jsonify({"data": config, "logs": logs})
+        return jsonify({
+            "data": config,
+            "active_window": plan.get("active_window"),
+            "logs": logs
+        })
 
     except Exception as e:
         elapsed = (time.perf_counter() - start_time) * 1000
