@@ -18,7 +18,7 @@ IST = pytz.timezone('Asia/Kolkata')
 
 
 # =========================
-# SYSTEM PROMPT (UNCHANGED)
+# SYSTEM PROMPT (UPDATED)
 # =========================
 SYSTEM_PROMPT = """
 You are a strict scheduling assistant.
@@ -26,7 +26,7 @@ You are a strict scheduling assistant.
 Return ONLY valid JSON. No explanation text.
 
 SUPPORTED TASK TYPES:
-hydration, eye, stretch, walk
+hydration, eye, stretch, walk, meditation
 
 ABSOLUTE MODE:
 - If user gives specific times (e.g. "at 9am, 1pm"):
@@ -38,6 +38,16 @@ INTERVAL MODE:
     - set interval_minutes
 
 Never include both interval_minutes and times.
+
+MEDITATION RULES:
+- Meditation is a time block (start → end)
+- Example: "meditate from 10am to 10:15am"
+- Return:
+  {
+    "type": "meditation",
+    "start_time": "HH:MM",
+    "end_time": "HH:MM"
+  }
 
 MEDICATION FORMAT:
 {
@@ -118,6 +128,15 @@ BASE_CONFIG = {
     "days": [],
     "abs": {"enabled": False, "times": []}
   },
+  "meditation": {
+    "enabled": False,
+    "sh": 0,
+    "sm": 0,
+    "eh": 0,
+    "em": 0,
+    "display_sec": 600,
+    "days": ["mon","tue","wed","thu","fri","sat","sun"]
+  },
   "dnd": {
     "enabled": False,
     "sh": 0, "sm": 0,
@@ -149,7 +168,8 @@ BASE_CONFIG = {
     "stretch": "Time to stretch!",
     "eye": "Time for eye break!",
     "walk": "Time for a short walk!",
-    "medication": "Medication reminder"
+    "medication": "Medication reminder",
+    "meditation": "Meditation time"
   },
   "images": {},
   "priority": []
@@ -190,7 +210,7 @@ def resolve_dates(start, end):
 
 
 # =========================
-# ✅ UPDATED SAFE PARSER
+# SAFE PARSE (ACTIVE HOURS)
 # =========================
 def safe_json_parse(text):
     try:
@@ -218,7 +238,7 @@ def safe_json_parse(text):
 
 
 # =========================
-# NORMALIZATION (UNCHANGED)
+# NORMALIZATION
 # =========================
 def normalize_tasks(parsed):
     tasks = parsed.get("tasks") or []
@@ -274,9 +294,6 @@ def normalize_medication(parsed):
     return out
 
 
-# =========================
-# ✅ UPDATED PLAN BUILDER
-# =========================
 def build_plan(parsed):
     active = parsed.get("active_window") or {}
 
@@ -292,7 +309,7 @@ def build_plan(parsed):
 
 
 # =========================
-# CONVERTER (UNCHANGED)
+# CONVERTER
 # =========================
 def convert_to_device_schema(plan):
 
@@ -348,6 +365,23 @@ def convert_to_device_schema(plan):
         elif t["type"] == "walk":
             apply("walk", "interval_min", 120)
 
+        elif t["type"] == "meditation":
+            if start and end:
+                sh, sm = start
+                eh, em = end
+
+                duration_sec = ((eh * 60 + em) - (sh * 60 + sm)) * 60
+
+                config["meditation"].update({
+                    "enabled": True,
+                    "sh": sh,
+                    "sm": sm,
+                    "eh": eh,
+                    "em": em,
+                    "display_sec": max(duration_sec, 60),
+                    "days": ["mon","tue","wed","thu","fri","sat","sun"]
+                })
+
     if plan.get("medication"):
         config["medication_cfg"]["enabled"] = True
         config["medication"] = plan["medication"]
@@ -356,7 +390,7 @@ def convert_to_device_schema(plan):
 
 
 # =========================
-# ROUTE (UPDATED RETURN ONLY)
+# ROUTE
 # =========================
 @app.route("/parse", methods=["POST"])
 def parse_schedule():
@@ -389,7 +423,7 @@ def parse_schedule():
         logs.append("Step 5: Device config generated")
 
         enabled = [
-            k for k in ["hydration","eye","stretch","walk"]
+            k for k in ["hydration","eye","stretch","walk","meditation"]
             if config.get(k, {}).get("enabled")
         ]
         logs.append(f"Enabled: {', '.join(enabled) if enabled else 'none'}")
