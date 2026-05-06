@@ -26,7 +26,7 @@ You are a strict scheduling assistant.
 Return ONLY valid JSON. No explanation text.
 
 SUPPORTED TASK TYPES:
-hydration, eye, stretch, walk, meditation
+hydration, eye, stretch, walk, meditation, pomodoro
 
 ABSOLUTE MODE:
 - If user gives specific times (e.g. "at 9am, 1pm"):
@@ -49,6 +49,19 @@ MEDITATION RULES:
     "end_time": "HH:MM"
   }
 
+POMODORO RULES:
+- Example: "pomodoro 25/5 for 4 cycles from 9am to 12pm"
+- Extract:
+  {
+    "type": "pomodoro",
+    "focus_min": int,
+    "break_min": int,
+    "cycles": int,
+    "start_time": "HH:MM",
+    "end_time": "HH:MM"
+  }
+- If cycles missing → default 4
+
 MEDICATION FORMAT:
 {
   "label": "string",
@@ -70,7 +83,7 @@ FINAL FORMAT:
 
 
 # =========================
-# BASE CONFIG (UNCHANGED)
+# BASE CONFIG (UPDATED)
 # =========================
 BASE_CONFIG = {
   "_meta": {"schema_ver": None, "device": "FROST", "ts_written": 0},
@@ -137,6 +150,14 @@ BASE_CONFIG = {
     "display_sec": 600,
     "days": ["mon","tue","wed","thu","fri","sat","sun"]
   },
+  "pomo": {
+    "enabled": False,
+    "focus_min": 25,
+    "break_min": 5,
+    "cycles": 4,
+    "lap_mode_enabled": True,
+    "laps": []
+  },
   "dnd": {
     "enabled": False,
     "sh": 0, "sm": 0,
@@ -169,7 +190,9 @@ BASE_CONFIG = {
     "eye": "Time for eye break!",
     "walk": "Time for a short walk!",
     "medication": "Medication reminder",
-    "meditation": "Meditation time"
+    "meditation": "Meditation time",
+    "pomodoro_focus": "Focus time started",
+    "pomodoro_break": "Break time started"
   },
   "images": {},
   "priority": []
@@ -210,7 +233,7 @@ def resolve_dates(start, end):
 
 
 # =========================
-# SAFE PARSE (ACTIVE HOURS)
+# SAFE JSON PARSE
 # =========================
 def safe_json_parse(text):
     try:
@@ -261,7 +284,10 @@ def normalize_tasks(parsed):
             "interval_minutes": safe_int(t.get("interval_minutes")),
             "times": parsed_times,
             "start_time": parse_time(t.get("start_time")),
-            "end_time": parse_time(t.get("end_time"))
+            "end_time": parse_time(t.get("end_time")),
+            "focus_min": safe_int(t.get("focus_min")),
+            "break_min": safe_int(t.get("break_min")),
+            "cycles": safe_int(t.get("cycles"))
         })
 
     return out
@@ -366,6 +392,7 @@ def convert_to_device_schema(plan):
             apply("walk", "interval_min", 120)
 
         elif t["type"] == "meditation":
+
             if start and end:
                 sh, sm = start
                 eh, em = end
@@ -380,6 +407,27 @@ def convert_to_device_schema(plan):
                     "em": em,
                     "display_sec": max(duration_sec, 60),
                     "days": ["mon","tue","wed","thu","fri","sat","sun"]
+                })
+
+        elif t["type"] == "pomodoro":
+
+            if start and end:
+                sh, sm = start
+                eh, em = end
+
+                config["pomo"].update({
+                    "enabled": True,
+                    "focus_min": t.get("focus_min") or 25,
+                    "break_min": t.get("break_min") or 5,
+                    "cycles": t.get("cycles") or 4,
+                    "lap_mode_enabled": True,
+                    "laps": [{
+                        "sh": sh,
+                        "sm": sm,
+                        "eh": eh,
+                        "em": em,
+                        "enabled": True
+                    }]
                 })
 
     if plan.get("medication"):
@@ -423,7 +471,7 @@ def parse_schedule():
         logs.append("Step 5: Device config generated")
 
         enabled = [
-            k for k in ["hydration","eye","stretch","walk","meditation"]
+            k for k in ["hydration","eye","stretch","walk","meditation","pomo"]
             if config.get(k, {}).get("enabled")
         ]
         logs.append(f"Enabled: {', '.join(enabled) if enabled else 'none'}")
