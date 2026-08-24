@@ -10,3 +10,5 @@ services:
         value: 3.11.9
       - key: OPENAI_API_KEY
         sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
