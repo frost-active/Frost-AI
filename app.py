@@ -54,14 +54,20 @@ hydration, eye, stretch, walk, meditation, pomodoro
 ABSOLUTE MODE:
 
 - If user gives one or more specific/exact clock times
-  (e.g. "at 9am", "at 8am exactly", "at 9am and 1pm"):
+  (e.g. "at 9am", "at 8am exactly", "at 9am and 1pm",
+  "at 10am 11am 2pm 3pm 5am"):
 
-    - set "times" = ["09:00"] or ["09:00","13:00"]
+    - set "times" to EVERY exact time the user listed, in the
+      same order, for example:
+      ["10:00","11:00","14:00","15:00","05:00"]
 
+    - A single "at" can introduce a list of times. The following
+      times may be separated by spaces, commas, semicolons, or "and".
+    - Support at least 12 explicit absolute time values.
+    - NEVER keep only the first time when multiple exact times
+      were supplied.
     - DO NOT include interval_minutes
-
     - DO NOT include start_time / end_time for this task
-
     - This applies even if only ONE exact time is given.
 
 Example:
@@ -600,50 +606,157 @@ def safe_json_parse(text):
 # TEXT EXTRACTION
 # =========================================================
 
+MAX_ABSOLUTE_TIMES = 12
+
+
+def _parse_time_token(hour_str, minute_str, ampm):
+    """
+    Validate a single (hour, minute, am/pm) token and convert it to
+    24h (hour, minute). Returns (value, reason) where value is None
+    and reason is a human-readable rejection message when the token
+    is not a real clock time.
+
+    - Malformed digit runs (e.g. "111am", "222pm" parsed as a
+      3-digit hour) are rejected outright.
+    - Minutes/hours out of range (e.g. "11:99", "22pm") are
+      rejected.
+    - "." or ".." are accepted as a colon substitute so typos like
+      "1.22" or "3..30" are read as "1:22" / "3:30" automatically.
+    """
+
+    if len(hour_str) > 2:
+        return None, f"'{hour_str}' is not a valid hour"
+
+    hour = int(hour_str)
+
+    minute = 0
+    if minute_str is not None:
+        if len(minute_str) > 2:
+            return None, f"'{minute_str}' is not a valid minute"
+        minute = int(minute_str)
+
+    if minute > 59:
+        return None, f"minute {minute:02d} is out of range (00-59)"
+
+    if ampm:
+        if not 1 <= hour <= 12:
+            return None, f"hour {hour} is invalid with am/pm (must be 1-12)"
+
+        if ampm.lower() == "am":
+            hour24 = 0 if hour == 12 else hour
+        else:
+            hour24 = 12 if hour == 12 else hour + 12
+    else:
+        if hour > 23:
+            return None, f"hour {hour} is out of range (00-23)"
+        hour24 = hour
+
+    return (hour24, minute), None
+
+
 def extract_explicit_times_from_text(text):
     """
-    Extract exact clock times that follow the word 'at'.
+    Extract exact clock times from an explicit "at" time list.
+
+    Supports:
+      "at 10am"
+      "at 10am and 11am"
+      "at 10am, 11am, 2pm, 3pm, 5am"
+      "at 10am 11am 2pm 3pm 5am"
+      "at 1.22"   -> 01:22 ("." accepted in place of ":")
+      "at 3..30"  -> 03:30 (typo'd double-dot still accepted)
+
+    The first "at" starts the list. Subsequent clock times in the
+    same list do not need another "at". Up to MAX_ABSOLUTE_TIMES
+    (12) valid times are kept, in the order given.
+
+    A malformed or out-of-range token (e.g. "111am", "222pm",
+    "11:99") does NOT abort the rest of the list -- it is skipped
+    and reported, and parsing continues with whatever comes next.
+
+    Returns a tuple: (valid_times, invalid_entries)
+      - valid_times: list of (hour24, minute) tuples, deduped, in
+        the order first seen, capped at MAX_ABSOLUTE_TIMES.
+      - invalid_entries: list of {"token": str, "reason": str}
+        for every token that looked like a time but wasn't valid.
     """
 
     if not isinstance(text, str):
-        return []
+        return [], []
 
-    pattern = re.compile(
-        r"\bat\s+(\d{1,2})(?:\s*:\s*(\d{2}))?\s*(am|pm)?"
-        r"(?:\s+exactly)?(?=\s|$|[,.!?])",
+    text_lower = text.lower()
+
+    # A clock-time token. Minutes may be separated by ":" or by one
+    # or two dots (covers "1.22" and the typo "3..30"). AM/PM is
+    # optional so lists such as "at 10am 11am 2pm" are supported.
+    time_token = re.compile(
+        r"(\d{1,4})(?:\s*[:.]{1,2}\s*(\d{1,4}))?\s*(am|pm)?"
+        r"(?:\s+exactly)?",
         re.IGNORECASE
     )
 
+    separator = re.compile(
+        r"\s*(?:(?:,|;|and)\s*)?",
+        re.IGNORECASE
+    )
+
+    # "at" must explicitly introduce the absolute-time list.
+    at_matches = list(re.finditer(r"\bat\b", text_lower))
+    if not at_matches:
+        return [], []
+
     found = []
+    invalid = []
 
-    for match in pattern.finditer(text.lower()):
+    # Parse each "at ..." clause independently. This also supports
+    # messages containing more than one reminder clause.
+    for at_match in at_matches:
+        pos = at_match.end()
 
-        hour = int(match.group(1))
-        minute = int(match.group(2) or 0)
-        ampm = match.group(3)
+        while pos < len(text_lower):
+            # Allow separators commonly used in a time list.
+            sep_match = separator.match(text_lower, pos)
+            if sep_match:
+                pos = sep_match.end()
 
-        if minute > 59:
-            continue
+            match = time_token.match(text_lower, pos)
+            if not match or not match.group(1):
+                break
 
-        if ampm:
+            token_text = match.group(0).strip()
+            pos = match.end()
 
-            if not 1 <= hour <= 12:
+            value, reason = _parse_time_token(
+                match.group(1),
+                match.group(2),
+                match.group(3)
+            )
+
+            if value is None:
+                invalid.append({
+                    "token": token_text,
+                    "reason": reason
+                })
+                # Keep scanning -- one bad token shouldn't drop the
+                # rest of the list.
                 continue
 
-            if ampm == "am":
-                hour = 0 if hour == 12 else hour
-            else:
-                hour = 12 if hour == 12 else hour + 12
+            if value in found:
+                continue
 
-        elif hour > 23:
-            continue
+            if len(found) >= MAX_ABSOLUTE_TIMES:
+                invalid.append({
+                    "token": token_text,
+                    "reason": (
+                        f"only the first {MAX_ABSOLUTE_TIMES} "
+                        f"absolute times are kept"
+                    )
+                })
+                continue
 
-        value = (hour, minute)
-
-        if value not in found:
             found.append(value)
 
-    return found
+    return found, invalid
 
 
 def extract_days_from_text(text):
@@ -751,9 +864,25 @@ def force_absolute_times_from_user_text(parsed, user_text):
     """
     Force supported reminder tasks into absolute mode when the
     user's original message explicitly contains 'at <time>'.
+
+    Malformed/out-of-range tokens (e.g. "111am", "22pm", "11:99")
+    are dropped individually and stashed on parsed["_invalid_times"]
+    so the /parse route can surface them -- they no longer cause
+    the rest of a valid time list to be discarded.
     """
 
-    explicit_times = extract_explicit_times_from_text(user_text)
+    explicit_times, invalid_tokens = extract_explicit_times_from_text(
+        user_text
+    )
+
+    if invalid_tokens:
+        parsed["_invalid_times"] = [
+            {
+                "task": "absolute_time",
+                "reason": f"\"{item['token']}\" — {item['reason']}"
+            }
+            for item in invalid_tokens
+        ]
 
     if not explicit_times:
         return parsed
@@ -2183,6 +2312,8 @@ def parse_schedule():
             data.get("text", "")
         )
 
+        time_parse_invalid = parsed.pop("_invalid_times", [])
+
         # Force "from X to Y" phrasing into a real window
         parsed = force_window_from_text(
             parsed,
@@ -2261,7 +2392,8 @@ def parse_schedule():
         )
 
         invalid = (
-            duration_mismatches
+            time_parse_invalid
+            + duration_mismatches
             + medication_mismatches
             + invalid
         )
