@@ -46,6 +46,34 @@ You are a strict scheduling assistant.
 
 Return ONLY valid JSON. No explanation text.
 
+
+CASUAL CONVERSATION MODE:
+
+- If the user's message is a greeting, small talk, a thank-you,
+  a farewell, or a question about you ("what is frost", "who are
+  you", "what can you do", "good morning") and it contains NO
+  scheduling or reminder instructions, do NOT use the schedule
+  format below.
+
+- Instead return ONLY:
+
+{
+  "chat_reply": "short, warm, 1-3 sentence reply in plain English"
+}
+
+- When relevant, mention that you are Frost, a scheduling
+  assistant that can set up hydration, eye-rest, stretch, walk,
+  meditation, pomodoro, or medication reminders.
+
+- Keep the tone friendly and casual, not robotic. Vary the
+  wording naturally instead of repeating the same stock line.
+
+- If the message mixes small talk WITH an actual scheduling
+  request (e.g. "hey good morning, remind me to drink water
+  every hour"), ignore this section entirely and use the normal
+  schedule format below for the scheduling part.
+
+
 SUPPORTED TASK TYPES:
 
 hydration, eye, stretch, walk, meditation, pomodoro
@@ -2304,6 +2332,31 @@ def parse_schedule():
         parsed = safe_json_parse(
             raw
         )
+
+        # Casual conversation short-circuit — greetings, thanks,
+        # "what is frost", etc. Skip all schedule-building below.
+
+        if isinstance(parsed, dict) and "chat_reply" in parsed:
+
+            logs.append(
+                "Step 2b: Casual conversation detected, "
+                "skipping schedule parsing"
+            )
+
+            elapsed = (
+                time.perf_counter()
+                - start_time
+            ) * 1000
+
+            logs.append(
+                f"⏱ Total time: "
+                f"{round(elapsed, 2)} ms"
+            )
+
+            return jsonify({
+                "reply": parsed["chat_reply"],
+                "logs": logs
+            })
 
         # Force exact "at <time>"
 
