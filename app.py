@@ -57,7 +57,6 @@ TYPO TOLERANCE:
   Never reject input, never ask for clarification, never
   reproduce the typo back to the user — just understand it.
 
-
 CASUAL CONVERSATION MODE:
 
 - If the user's message is a greeting, small talk, a thank-you,
