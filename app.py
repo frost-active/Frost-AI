@@ -46,9 +46,53 @@ You are a strict scheduling assistant.
 
 Return ONLY valid JSON. No explanation text.
 
+
+TYPO TOLERANCE:
+
+- Users often misspell words on mobile keyboards or voice
+  transcription (e.g. "remaind"/"remind me", "recouring"/
+  "recurring", "wenesday"/"wednesday", "toursday"/"thursday",
+  "everydey"/"every day", "hydartion"/"hydration"). Silently
+  interpret the intended word from context and proceed normally.
+  Never reject input, never ask for clarification, never
+  reproduce the typo back to the user — just understand it.
+
+
+CASUAL CONVERSATION MODE:
+
+- If the user's message is a greeting, small talk, a thank-you,
+  a farewell, or a question about you ("what is frost", "who are
+  you", "what can you do", "good morning") and it contains NO
+  scheduling or reminder instructions, do NOT use the schedule
+  format below.
+
+- Instead return ONLY:
+
+{
+  "chat_reply": "short, warm, 1-3 sentence reply in plain English"
+}
+
+- When relevant, mention that you are Frost, a scheduling
+  assistant that can set up hydration, eye-rest, stretch, walk,
+  meditation, pomodoro, or medication reminders.
+
+- Keep the tone friendly and casual, not robotic. Vary the
+  wording naturally instead of repeating the same stock line.
+
+- If the message mixes small talk WITH an actual scheduling
+  request (e.g. "hey good morning, remind me to drink water
+  every hour"), ignore this section entirely and use the normal
+  schedule format below for the scheduling part.
+
+
 SUPPORTED TASK TYPES:
 
 hydration, eye, stretch, walk, meditation, pomodoro
+
+For anything that is NOT one of the above and is not a
+medication (e.g. "remind me to call mom", "remind me to submit
+the assignment"), use the separate CUSTOM REMINDER RULES below
+instead — do not force it into one of these task types.
 
 
 ABSOLUTE MODE:
@@ -238,12 +282,83 @@ MEDICATION FORMAT:
   only the days the user actually named, or every day by default.
 
 
+CUSTOM REMINDER RULES:
+
+- Use this for any reminder that is NOT hydration, eye, stretch,
+  walk, meditation, pomodoro, or medication — e.g. "remind me to
+  call mom", "remind me to submit the assignment", "remind me to
+  check the oven".
+
+- Put each one in the top-level "custom" array (NOT in "tasks").
+
+- ONE-TIME reminder — a specific calendar date, "today",
+  "tomorrow", a single named upcoming weekday meant as one
+  occurrence, or the word "once"/"one time":
+
+{
+  "label": "string describing what to remind about",
+  "date": "YYYY-MM-DD",
+  "times": ["HH:MM"]
+}
+
+  - Resolve relative dates ("tomorrow", "next friday") to a real
+    YYYY-MM-DD date using TODAY'S DATE given below.
+  - Do NOT include "days" for a one-time reminder.
+
+- RECURRING reminder — a repeating day-of-week pattern such as
+  "every monday", "on mondays and wednesdays", "daily",
+  "every day", "weekdays", "weekends", or "remind me daily":
+
+{
+  "label": "string describing what to remind about",
+  "days": ["mon","tue","wed","thu","fri","sat","sun"],
+  "times": ["HH:MM"]
+}
+
+  - Follow the same DAY RULES as tasks above. If the user says
+    "every day"/"daily" with no specific days, OMIT "days"
+    entirely (defaults to every day).
+  - Do NOT include "date" for a recurring reminder.
+
+- A single "at" can introduce a list of times, same as ABSOLUTE
+  MODE above (e.g. "remind me to take a break at 11am and 3pm").
+
+Example:
+
+User: "remind me on 10am every monday to submit assignment"
+
+{
+  "custom": [
+    {
+      "label": "submit assignment",
+      "days": ["mon"],
+      "times": ["10:00"]
+    }
+  ]
+}
+
+Example:
+
+User: "remind me to call mom tomorrow at 6pm"
+
+{
+  "custom": [
+    {
+      "label": "call mom",
+      "date": "<tomorrow's real date>",
+      "times": ["18:00"]
+    }
+  ]
+}
+
+
 FINAL FORMAT:
 
 {
   "active_window": {"start": "HH:MM", "end": "HH:MM"},
   "tasks": [],
   "medication": [],
+  "custom": [],
   "do_not_disturb": [],
   "exclusions": []
 }
@@ -597,6 +712,7 @@ def safe_json_parse(text):
             },
             "tasks": [],
             "medication": [],
+            "custom": [],
             "do_not_disturb": [],
             "exclusions": []
         }
@@ -1414,6 +1530,59 @@ def normalize_medication(parsed):
     return out
 
 
+def normalize_custom(parsed):
+    """
+    Custom (freeform) reminders — anything that isn't hydration,
+    eye, stretch, walk, meditation, pomodoro, or medication.
+    Each entry is either one-time ("date" set) or recurring
+    ("days" set).
+    """
+
+    items = parsed.get("custom") or []
+
+    out = []
+
+    for c in items:
+
+        times = []
+
+        for t in (c.get("times") or []):
+
+            pt = parse_time(t)
+
+            if pt:
+                times.append(
+                    f"{pt[0]:02d}:{pt[1]:02d}"
+                )
+
+        if not times:
+            continue
+
+        entry = {
+            "label": c.get(
+                "label",
+                "Reminder"
+            ),
+            "times": times
+        }
+
+        date_val = c.get("date")
+
+        if date_val:
+            entry["date"] = date_val
+            entry["repeat"] = False
+
+        else:
+            entry["days"] = normalize_days(
+                c.get("days")
+            )
+            entry["repeat"] = True
+
+        out.append(entry)
+
+    return out
+
+
 def build_plan(parsed):
 
     active = parsed.get(
@@ -1424,6 +1593,10 @@ def build_plan(parsed):
         "tasks": normalize_tasks(parsed),
 
         "medication": normalize_medication(
+            parsed
+        ),
+
+        "custom": normalize_custom(
             parsed
         ),
 
@@ -2251,6 +2424,49 @@ def convert_to_new_schema(plan):
                 "medication"
             ]["medicines"] = medicines
 
+    # =====================================================
+    # CUSTOM REMINDERS
+    # =====================================================
+
+    if plan.get("custom"):
+
+        events = []
+
+        for c in plan["custom"]:
+
+            repeat = c.get("repeat", True)
+
+            events.append({
+                "id":
+                    f"custom_{len(events) + 1:03d}",
+
+                "label":
+                    c.get("label", "Reminder"),
+
+                "enabled": True,
+
+                "repeat": repeat,
+
+                "date":
+                    c.get("date") if not repeat else None,
+
+                "days":
+                    c.get("days", ALL_DAYS[:]) if repeat else [],
+
+                "times":
+                    c.get("times", [])
+            })
+
+        if events:
+
+            reminders[
+                "custom"
+            ]["enabled"] = True
+
+            reminders[
+                "custom"
+            ]["events"] = events
+
     return config, invalid
 
 
@@ -2273,6 +2489,14 @@ def parse_schedule():
             "Step 1: Input received"
         )
 
+        today_ist = datetime.now(IST)
+
+        dated_system_prompt = (
+            SYSTEM_PROMPT
+            + "\n\nTODAY'S DATE: "
+            + today_ist.strftime("%Y-%m-%d (%A)")
+        )
+
         response = client.responses.create(
 
             model="gpt-5-nano",
@@ -2281,7 +2505,7 @@ def parse_schedule():
 
                 {
                     "role": "system",
-                    "content": SYSTEM_PROMPT
+                    "content": dated_system_prompt
                 },
 
                 {
@@ -2304,6 +2528,31 @@ def parse_schedule():
         parsed = safe_json_parse(
             raw
         )
+
+        # Casual conversation short-circuit — greetings, thanks,
+        # "what is frost", etc. Skip all schedule-building below.
+
+        if isinstance(parsed, dict) and "chat_reply" in parsed:
+
+            logs.append(
+                "Step 2b: Casual conversation detected, "
+                "skipping schedule parsing"
+            )
+
+            elapsed = (
+                time.perf_counter()
+                - start_time
+            ) * 1000
+
+            logs.append(
+                f"⏱ Total time: "
+                f"{round(elapsed, 2)} ms"
+            )
+
+            return jsonify({
+                "reply": parsed["chat_reply"],
+                "logs": logs
+            })
 
         # Force exact "at <time>"
 
@@ -2434,7 +2683,8 @@ def parse_schedule():
                 "eye",
                 "stretch",
                 "walk",
-                "meditation"
+                "meditation",
+                "custom"
             ]
             if reminders_cfg.get(
                 k,
@@ -2478,6 +2728,25 @@ def parse_schedule():
             logs.append(
                 "Medication count: "
                 f"{len(medicines)}"
+            )
+
+        custom_events = (
+            reminders_cfg
+            .get(
+                "custom",
+                {}
+            )
+            .get(
+                "events",
+                []
+            )
+        )
+
+        if custom_events:
+
+            logs.append(
+                "Custom reminder count: "
+                f"{len(custom_events)}"
             )
 
         elapsed = (

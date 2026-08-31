@@ -1,0 +1,255 @@
+{
+  "_meta": {
+    "schema_ver": 6,
+    "device": "FROST",
+    "ts_written": 1787414373
+  },
+  "reminders": {
+    "hydration": {
+      "enabled": true,
+      "mode": "interval",
+      "interval_ms": 3000000,
+      "display_ms": 60000,
+      "require_ack": true,
+      "goal_ml": 0,
+      "start_hour": 0,
+      "start_min": 0,
+      "end_hour": 23,
+      "end_min": 59,
+      "days": [
+        "wed",
+        "thu",
+        "sun"
+      ],
+      "abs": {
+        "times": []
+      }
+    },
+    "stretch": {
+      "enabled": true,
+      "mode": "absolute",
+      "interval_ms": 3600000,
+      "display_ms": 60000,
+      "require_ack": true,
+      "start_hour": 8,
+      "start_min": 0,
+      "end_hour": 20,
+      "end_min": 0,
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ],
+      "abs": {
+        "times": [
+          {
+            "h": 10,
+            "m": 0
+          }
+        ]
+      }
+    },
+    "eye": {
+      "enabled": false,
+      "mode": "interval",
+      "interval_ms": 1800000,
+      "display_ms": 60000,
+      "require_ack": true,
+      "start_hour": 8,
+      "start_min": 0,
+      "end_hour": 20,
+      "end_min": 0,
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ],
+      "abs": {
+        "times": []
+      }
+    },
+    "walk": {
+      "enabled": true,
+      "mode": "interval",
+      "interval_ms": 7200000,
+      "display_ms": 60000,
+      "require_ack": true,
+      "start_hour": 9,
+      "start_min": 0,
+      "end_hour": 9,
+      "end_min": 30,
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ],
+      "abs": {
+        "times": []
+      }
+    },
+    "meditation": {
+      "enabled": false,
+      "sh": 0,
+      "sm": 0,
+      "eh": 0,
+      "em": 0,
+      "display_sec": 600,
+      "require_ack": true,
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ]
+    },
+    "medication": {
+      "enabled": true,
+      "require_ack": true,
+      "snooze_min": 15,
+      "display_ms": 60000,
+      "medicines": [
+        {
+          "id": "med_001",
+          "label": "Pill",
+          "enabled": true,
+          "start": "2026-08-22",
+          "end": "2099-12-31",
+          "days": [
+            "mon",
+            "tue",
+            "wed",
+            "thu",
+            "fri",
+            "sat",
+            "sun"
+          ],
+          "doses_per_day": 1,
+          "reminder_period_min": 10,
+          "snooze_min": 15,
+          "text_x": 120,
+          "text_y": 135,
+          "text_size": 1,
+          "text_color": 65535,
+          "text_align": 1,
+          "text_width": 180,
+          "doses": [
+            {
+              "h": 9,
+              "m": 0
+            }
+          ]
+        },
+        {
+          "id": "med_001",
+          "label": "Morning and Evening Medicines",
+          "enabled": true,
+          "start": "2026-08-22",
+          "end": "2099-12-31",
+          "days": [
+            "mon",
+            "tue",
+            "wed",
+            "thu",
+            "fri",
+            "sat",
+            "sun"
+          ],
+          "doses_per_day": 2,
+          "reminder_period_min": 0,
+          "snooze_min": 15,
+          "text_x": 120,
+          "text_y": 135,
+          "text_size": 1,
+          "text_color": 65535,
+          "text_align": 1,
+          "text_width": 180,
+          "doses": [
+            {
+              "h": 8,
+              "m": 0
+            },
+            {
+              "h": 8,
+              "m": 0
+            }
+          ]
+        }
+      ]
+    },
+    "custom": {
+      "enabled": false,
+      "require_ack": true,
+      "events": []
+    }
+  },
+  "audio": {
+    "volume": 15,
+    "pomodoro": {
+      "enabled": true,
+      "tracks": [
+        45
+      ]
+    },
+    "meditation": {
+      "enabled": true,
+      "tracks": [
+        45
+      ]
+    },
+    "healing": {
+      "enabled": false,
+      "require_dock": true,
+      "tracks": [
+        45
+      ]
+    },
+    "healing_schedules": []
+  },
+  "bottle_clean": {
+    "enabled": false,
+    "interval_days": 1,
+    "hour": 18,
+    "minute": 0,
+    "display_ms": 60000,
+    "require_ack": true
+  },
+  "pomodoro": {
+    "enabled": false,
+    "focus_min": 25,
+    "break_min": 5,
+    "cycles": 4,
+    "auto_start_break": true,
+    "auto_start_focus": true,
+    "lap_mode_enabled": true,
+    "laps": [],
+    "focus_counter": {
+      "x": 102,
+      "y": 125,
+      "text_size": 1,
+      "text_color": 0,
+      "text_align": 1
+    },
+    "break_counter": {
+      "x": 120,
+      "y": 150,
+      "text_size": 1,
+      "text_color": 0,
+      "text_align": 1
+    }
+  }
+}
